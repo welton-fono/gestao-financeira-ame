@@ -12,7 +12,7 @@ st.set_page_config(page_title="AME - Financeiro PRO", layout="wide", page_icon="
 # --- CSS PARA DESIGN PROFISSIONAL ---
 st.markdown("""
     <style>
-    .stMetric {background-color: #ffffff; padding: 15px; border-radius: 10px; border: 1px solid #e0e0e0;}
+    .stMetric {background-color: #ffffff; padding: 15px; border-radius: 10px; border: 1px solid #e0e0e0; box-shadow: 2px 2px 5px rgba(0,0,0,0.05);}
     .stExpander {border: 1px solid #d1d1d1; border-radius: 8px; margin-bottom: 10px;}
     </style>
 """, unsafe_allow_html=True)
@@ -47,6 +47,8 @@ with aba_envio:
             cliente = st.text_input("🏢 Empresa/Cliente").upper()
             cnpj = st.text_input("📑 CNPJ da Empresa")
             valor = st.number_input("💰 Valor (R$)", min_value=0.0, format="%.2f")
+            nf_emitida = st.checkbox("🧾 Nota Fiscal já foi emitida?") # NOVO CAMPO DE NF
+            
         with col2:
             funcionario = st.text_input("👤 Nome do Funcionário (Exame)")
             arquivo = st.file_uploader("📎 Anexar Comprovante (PDF, Imagem)")
@@ -74,6 +76,7 @@ with aba_envio:
                         "cnpj": cnpj,
                         "funcionario": funcionario,
                         "valor": valor,
+                        "nf_emitida": nf_emitida, # SALVA O STATUS DA NF
                         "url": blob.public_url,
                         "nome_storage": nome_arq,
                         "tipo": ext,
@@ -88,13 +91,16 @@ with aba_envio:
 with aba_busca:
     st.subheader("Painel de Controle Financeiro")
     
-    c1, c2, c3 = st.columns([2, 1, 1])
+    # Adicionado um novo filtro para a NF
+    c1, c2, c3, c4 = st.columns([2, 1, 1, 1])
     with c1:
         busca = st.text_input("🔍 Buscar por Empresa ou Funcionário:").upper()
     with c2:
         mes_atual = datetime.now(fuso_br).strftime("%m/%Y")
-        mes_filtro = st.text_input("📅 Mês/Ano (Ex: 04/2026)", value=mes_atual)
+        mes_filtro = st.text_input("📅 Mês/Ano", value=mes_atual)
     with c3:
+        filtro_nf = st.selectbox("🧾 Status da NF", ["Todos", "⏳ Pendentes", "✅ Emitidas"])
+    with c4:
         st.write("") 
         if st.button("🔄 Atualizar Lista", use_container_width=True):
             st.rerun()
@@ -107,57 +113,78 @@ with aba_busca:
         for doc in docs:
             d = doc.to_dict()
             d['id'] = doc.id
+            d['nf_emitida'] = d.get('nf_emitida', False) # Proteção para os arquivos velhos
             lista_dados.append(d)
         
         if lista_dados:
-            # Substitui valores nulos ou NaN por strings vazias para evitar erros
             df = pd.DataFrame(lista_dados).fillna("")
             
+            # Aplicação dos Filtros
             if busca:
                 df = df[(df['cliente'].astype(str).str.contains(busca)) | (df['funcionario'].astype(str).str.contains(busca))]
             if mes_filtro:
                 df = df[df['mes_ano'] == mes_filtro]
             
+            if filtro_nf == "⏳ Pendentes":
+                df = df[df['nf_emitida'] == False]
+            elif filtro_nf == "✅ Emitidas":
+                df = df[df['nf_emitida'] == True]
+            
             if not df.empty:
-                t1, t2 = st.columns(2)
-                t1.metric("💰 Total Valor", f"R$ {df['valor'].sum():,.2f}")
-                t2.metric("📄 Total Registros", f"{len(df)} docs")
+                # Novas Métricas de Dashboard
+                t1, t2, t3 = st.columns(3)
+                t1.metric("💰 Total (Filtro)", f"R$ {df['valor'].sum():,.2f}")
+                t2.metric("📄 Total de Registros", f"{len(df)} docs")
+                qtd_pendentes = len(df[df['nf_emitida'] == False])
+                t3.metric("⚠️ NFs Pendentes", f"{qtd_pendentes} notas")
                 st.divider()
 
                 for i, row in df.iterrows():
                     icon = "📕" if row['tipo'] == 'pdf' else "🖼️"
-                    # Limpeza visual para dados antigos
-                    func_v = row['funcionario'] if row['funcionario'] and str(row['funcionario']).lower() != "nan" else "Não informado"
-                    cnpj_v = row['cnpj'] if row['cnpj'] and str(row['cnpj']).lower() != "nan" else "Não informado"
+                    func_v = row['funcionario'] if row['funcionario'] and str(row['funcionario']).lower() != "nan" else "N/A"
+                    cnpj_v = row['cnpj'] if row['cnpj'] and str(row['cnpj']).lower() != "nan" else "N/A"
                     
-                    with st.expander(f"{icon} {row['cliente']} | {func_v} | R$ {row['valor']:.2f}"):
+                    # Selo visual de status
+                    status_nf = "✅ NF Emitida" if row['nf_emitida'] else "⏳ NF Pendente"
+                    
+                    with st.expander(f"{icon} {row['cliente']} | {func_v} | R$ {row['valor']:.2f} | {status_nf}"):
                         col_a, col_b = st.columns([2, 1])
                         with col_a:
                             st.write(f"**🏢 Empresa:** {row['cliente']} (CNPJ: {cnpj_v})")
                             st.write(f"**👤 Funcionário:** {func_v}")
-                            st.write(f"**⏰ Horário:** {row.get('hora', '--:--')}")
+                            st.write(f"**⏰ Data/Hora:** {row.get('dia', '--')} às {row.get('hora', '--:--')}")
                             st.write(f"**📝 Obs:** {row.get('obs', '')}")
-                            st.link_button("📂 Abrir Arquivo", row['url'])
+                            st.write(f"**🧾 Status Fiscal:** {status_nf}")
+                            st.link_button("📂 Abrir Arquivo Original", row['url'])
                             
-                            # LOGICA DE EXCLUSÃO MELHORADA
-                            if st.button(f"🗑️ Deletar Registro", key=f"del_{row['id']}"):
-                                try:
-                                    # Pega o nome do arquivo e verifica se é válido (não é vazio nem "nan")
-                                    nome_arq_storage = str(row.get('nome_storage', '')).strip()
-                                    
-                                    if nome_arq_storage and nome_arq_storage.lower() != "nan":
+                            st.write("---")
+                            # BOTÕES DE AÇÃO LADO A LADO
+                            act1, act2 = st.columns(2)
+                            with act1:
+                                # Se estiver pendente, mostra o botão para dar baixa na NF
+                                if not row['nf_emitida']:
+                                    if st.button(f"✅ Marcar NF Emitida", key=f"ok_{row['id']}", type="primary"):
                                         try:
-                                            # Tenta apagar, mas se não achar o arquivo, não trava o programa
-                                            bucket.blob(f"comprovantes/{nome_arq_storage}").delete()
-                                        except Exception:
-                                            pass 
-                                            
-                                    # Apaga o registro do banco de dados (isso sempre funciona se o ID existir)
-                                    db.collection("pagamentos").document(row['id']).delete()
-                                    st.success("Registro removido!")
-                                    st.rerun()
-                                except Exception as err:
-                                    st.error(f"Erro ao apagar: {err}")
+                                            db.collection("pagamentos").document(row['id']).update({"nf_emitida": True})
+                                            st.success("Nota Fiscal baixada com sucesso!")
+                                            st.rerun()
+                                        except Exception as err:
+                                            st.error(f"Erro ao atualizar: {err}")
+                            with act2:
+                                if st.button(f"🗑️ Deletar Registro", key=f"del_{row['id']}"):
+                                    try:
+                                        nome_arq_storage = str(row.get('nome_storage', '')).strip()
+                                        if nome_arq_storage and nome_arq_storage.lower() != "nan":
+                                            try:
+                                                bucket.blob(f"comprovantes/{nome_arq_storage}").delete()
+                                            except Exception:
+                                                pass 
+                                                
+                                        db.collection("pagamentos").document(row['id']).delete()
+                                        st.success("Registro removido!")
+                                        st.rerun()
+                                    except Exception as err:
+                                        st.error(f"Erro ao apagar: {err}")
 
                         with col_b:
                             if row['tipo'] in ['png', 'jpg', 'jpeg']:
@@ -165,7 +192,7 @@ with aba_busca:
                             else:
                                 st.info("Sem preview.")
             else:
-                st.info("Nenhum registro encontrado.")
+                st.info("Nenhum registro encontrado para estes filtros.")
         else:
             st.info("O sistema está vazio.")
             
