@@ -11,6 +11,7 @@ if not firebase_admin._apps:
         creds_dict = json.loads(st.secrets["firebase_key"])
         cred = credentials.Certificate(creds_dict)
         firebase_admin.initialize_app(cred, {
+            # O ID correto conforme seu console é chamdor-amesaude (sem o 'a')
             'storageBucket': 'chamdor-amesaude.appspot.com' 
         })
     except Exception as e:
