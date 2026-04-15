@@ -1,89 +1,75 @@
 import streamlit as st
-import pandas as pd
-from datetime import datetime
-import json
 import firebase_admin
 from firebase_admin import credentials, firestore, storage
+from datetime import datetime
+import json
+import pandas as pd
 
-# --- CONFIGURAÇÃO DO FIREBASE ---
-# Verifica se o app já foi iniciado para não dar erro de duplicidade
+# --- CONEXÃO FIREBASE ---
 if not firebase_admin._apps:
-    creds_dict = json.loads(st.secrets["firebase_key"])
-    cred = credentials.Certificate(creds_dict)
-    firebase_admin.initialize_app(cred, {
-        'storageBucket': 'chamador-amesaude.appspot.com' 
-    })
+    try:
+        # Lê a chave que você colou no Secrets
+        creds_dict = json.loads(st.secrets["firebase_key"])
+        cred = credentials.Certificate(creds_dict)
+        firebase_admin.initialize_app(cred, {
+            'storageBucket': 'chamador-amesaude.appspot.com' 
+        })
+    except Exception as e:
+        st.error(f"Erro na chave de segurança: {e}")
 
 db = firestore.client()
 bucket = storage.bucket()
 
 # --- INTERFACE ---
-st.set_page_config(page_title="Financeiro AME", page_icon="💰", layout="wide")
-st.title("🏥 AME - Sistema de Comprovantes Online")
+st.set_page_config(page_title="AME - Sistema de Comprovantes", layout="wide")
+st.title("🏥 AME - Gestão de Comprovantes Online")
 
 aba_recepcao, aba_financeiro = st.tabs(["📥 Recepção (Envio)", "🔍 Financeiro (Consulta)"])
 
 with aba_recepcao:
     st.subheader("Registrar Novo Pagamento")
-    # O form ajuda a limpar os campos após o envio
     with st.form("form_caixa", clear_on_submit=True):
         cliente = st.text_input("Nome da Empresa ou Cliente")
         valor = st.number_input("Valor Recebido (R$)", min_value=0.0, format="%.2f")
-        
-        # AQUI ESTÁ O CAMPO QUE FALTAVA:
-        arquivo = st.file_uploader("Anexe a foto ou PDF do comprovante", type=["png", "jpg", "jpeg", "pdf"])
-        
-        obs = st.text_area("Observações (Ex: Referente a quais exames?)")
+        arquivo = st.file_uploader("Anexe a foto do comprovante", type=["png", "jpg", "jpeg", "pdf"])
+        obs = st.text_area("Observações")
         
         enviado = st.form_submit_button("Enviar para o Financeiro")
         
         if enviado:
             if cliente and valor > 0 and arquivo:
                 try:
-                    # 1. Enviar a foto para o Firebase Storage
+                    # 1. Salvar arquivo no Storage
                     nome_arquivo = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{cliente}.jpg"
                     blob = bucket.blob(f"comprovantes/{nome_arquivo}")
                     blob.upload_from_string(arquivo.read(), content_type=arquivo.type)
-                    
-                    # Torna o link da foto público para o financeiro conseguir abrir
                     blob.make_public()
                     url_foto = blob.public_url
                     
-                    # 2. Salvar os dados e o link da foto no Firestore
-                    data_hoje = datetime.now().strftime("%d/%m/%Y %H:%M")
+                    # 2. Salvar dados no Firestore
                     db.collection("pagamentos").add({
-                        "data": data_hoje,
+                        "data": datetime.now().strftime("%d/%m/%Y %H:%M"),
                         "cliente": cliente,
                         "valor": valor,
-                        "comprovante_url": url_foto,
+                        "url_foto": url_foto,
                         "status": "Pendente",
-                        "observacoes": obs
+                        "obs": obs
                     })
-                    
-                    st.success(f"✅ Sucesso! O comprovante de {cliente} foi enviado.")
+                    st.success(f"✅ Sucesso! O pagamento de {cliente} foi registrado.")
                 except Exception as e:
                     st.error(f"Erro ao enviar: {e}")
             else:
-                st.warning("⚠️ Por favor, preencha o nome, o valor e anexe o arquivo.")
+                st.warning("⚠️ Preencha o nome, valor e anexe o arquivo.")
 
 with aba_financeiro:
     st.subheader("Painel de Consulta")
     if st.button("🔄 Atualizar Lista"):
-        # Busca os dados do Firebase
-        docs = db.collection("pagamentos").order_by("data", direction="DESCENDING").stream()
-        lista_pagamentos = [doc.to_dict() for doc in docs]
-        
-        if lista_pagamentos:
-            df = pd.DataFrame(lista_pagamentos)
-            
-            # Filtro de busca por nome
-            busca = st.text_input("Filtrar por nome do cliente")
-            if busca:
-                df = df[df['cliente'].str.contains(busca, case=False)]
-            
-            # Exibe a tabela com o link clicável para a foto
+        docs = db.collection("pagamentos").stream()
+        lista = [doc.to_dict() for doc in docs]
+        if lista:
+            df = pd.DataFrame(lista)
             st.dataframe(df, column_config={
-                "comprovante_url": st.column_config.LinkColumn("Ver Foto")
+                "url_foto": st.column_config.LinkColumn("Ver Foto")
             })
         else:
-            st.info("Nenhum pagamento registrado ainda.")
+            st.info("Nenhum registro encontrado.")
