@@ -4,15 +4,17 @@ from firebase_admin import credentials, firestore, storage
 from datetime import datetime
 import json
 import pandas as pd
+import pytz # Biblioteca para Fuso Horário
 
-# --- CONFIGURAÇÃO DA PÁGINA (Precisa ser a primeira linha) ---
-st.set_page_config(page_title="AME - Financeiro", layout="wide", page_icon="🏥", initial_sidebar_state="expanded")
+# --- CONFIGURAÇÃO DA PÁGINA ---
+st.set_page_config(page_title="AME - Financeiro PRO", layout="wide", page_icon="🏥")
 
-# --- CSS CUSTOMIZADO PARA DEIXAR BONITO ---
+# --- CSS PARA DESIGN PROFISSIONAL ---
 st.markdown("""
     <style>
-    .stMetric {background-color: #f8f9fa; padding: 15px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); text-align: center;}
-    h1 {color: #0056b3;}
+    .stMetric {background-color: #ffffff; padding: 15px; border-radius: 10px; border: 1px solid #e0e0e0;}
+    .stExpander {border: 1px solid #d1d1d1; border-radius: 8px; margin-bottom: 10px;}
+    .main {background-color: #f9f9f9;}
     </style>
 """, unsafe_allow_html=True)
 
@@ -25,136 +27,145 @@ if not firebase_admin._apps:
             'storageBucket': 'chamdor-amesaude.firebasestorage.app'
         })
     except Exception as e:
-        st.error(f"Erro na conexão com o Firebase: {e}")
+        st.error(f"Erro na conexão: {e}")
 
 db = firestore.client()
 bucket = storage.bucket()
+fuso_br = pytz.timezone('America/Sao_Paulo') # Configura Brasília
 
 # --- CABEÇALHO ---
-st.title("🏥 AME Saúde - Gestão Financeira")
-st.markdown("Sistema inteligente para organização de arquivos, comprovantes e faturamento.")
+st.title("🏥 AME Saúde - Gestão de Documentos Profissional")
+st.markdown(f"**Horário Atual (Brasília):** {datetime.now(fuso_br).strftime('%d/%m/%Y %H:%M')}")
 st.divider()
 
-aba_envio, aba_busca = st.tabs(["📤 Lançar Novo Documento", "📊 Painel e Histórico"])
+aba_envio, aba_busca = st.tabs(["📥 Enviar Novo Comprovante", "📊 Painel do Financeiro"])
 
 with aba_envio:
-    st.subheader("Registrar Novo Lançamento")
-    
+    st.subheader("Registrar Documento")
     with st.form("form_caixa", clear_on_submit=True):
-        # Campos divididos em duas colunas para ficar elegante
         col1, col2 = st.columns(2)
         with col1:
-            cliente = st.text_input("🏢 Nome da Empresa ou Cliente").upper()
+            cliente = st.text_input("🏢 Empresa/Cliente").upper()
+            cnpj = st.text_input("📑 CNPJ da Empresa")
             valor = st.number_input("💰 Valor (R$)", min_value=0.0, format="%.2f")
         with col2:
-            arquivo = st.file_uploader("📎 Selecione o arquivo (PDF, Imagem, Word)")
-            obs = st.text_area("📝 Observações Adicionais (Opcional)", height=68)
+            funcionario = st.text_input("👤 Nome do Funcionário (Exame)")
+            arquivo = st.file_uploader("📎 Anexar Comprovante (PDF, Imagem)")
+            obs = st.text_area("📝 Observações", height=68)
         
-        enviado = st.form_submit_button("🚀 SALVAR NO SISTEMA", use_container_width=True)
+        enviado = st.form_submit_button("🚀 SALVAR REGISTRO", use_container_width=True)
         
         if enviado:
-            if cliente and arquivo:
+            if cliente and arquivo and cnpj and funcionario:
                 try:
-                    extensao = arquivo.name.split('.')[-1].lower()
-                    agora = datetime.now()
-                    nome_arq = f"{agora.strftime('%Y%m%d_%H%M%S')}_{cliente}.{extensao}"
+                    ext = arquivo.name.split('.')[-1].lower()
+                    agora = datetime.now(fuso_br)
+                    # Nome do arquivo no storage
+                    nome_arq = f"{agora.strftime('%Y%m%d_%H%M%S')}_{cliente}.{ext}"
                     
+                    # Upload Storage
                     blob = bucket.blob(f"comprovantes/{nome_arq}")
                     blob.upload_from_string(arquivo.read(), content_type=arquivo.type)
                     blob.make_public()
                     
-                    # Salva os dados de tempo bem detalhados para organização
+                    # Salva no Firestore
                     db.collection("pagamentos").add({
-                        "data_completa": agora.strftime("%Y/%m/%d %H:%M:%S"), # Formato para o sistema ordenar fácil
+                        "data_completa": agora.strftime("%Y/%m/%d %H:%M:%S"),
                         "dia": agora.strftime("%d/%m/%Y"),
                         "hora": agora.strftime("%H:%M"),
                         "mes_ano": agora.strftime("%m/%Y"),
                         "cliente": cliente,
+                        "cnpj": cnpj,
+                        "funcionario": funcionario,
                         "valor": valor,
                         "url": blob.public_url,
-                        "tipo": extensao,
+                        "nome_storage": nome_arq, # Guardamos para poder deletar depois
+                        "tipo": ext,
                         "obs": obs
                     })
-                    st.success(f"✅ Sucesso! O comprovante de {cliente} foi salvo e organizado no dia {agora.strftime('%d/%m/%Y')} às {agora.strftime('%H:%M')}.")
+                    st.success(f"✅ Registro de {cliente} salvo com sucesso em {agora.strftime('%H:%M')}!")
                 except Exception as e:
-                    st.error(f"Erro no envio: {e}")
+                    st.error(f"Erro: {e}")
             else:
-                st.warning("⚠️ Preencha o nome da empresa e anexe o arquivo antes de enviar.")
+                st.warning("⚠️ Todos os campos e o arquivo são obrigatórios.")
 
 with aba_busca:
-    st.subheader("Painel de Controle")
+    st.subheader("Painel de Controle Financeiro")
     
-    # Linha de Filtros
-    f_col1, f_col2, f_col3 = st.columns([2, 1, 1])
-    with f_col1:
-        busca = st.text_input("🔍 Buscar por Empresa/Cliente:").upper()
-    with f_col2:
-        meses_lista = [f"{str(i).zfill(2)}/{datetime.now().year}" for i in range(1, 13)]
-        mes_atual = datetime.now().strftime("%m/%Y")
-        mes_filtro = st.selectbox("📅 Filtrar por Mês", ["Todos"] + meses_lista, index=meses_lista.index(mes_atual) + 1)
-    with f_col3:
-        st.markdown("<br>", unsafe_allow_html=True) # Espaço para alinhar
-        if st.button("🔄 Atualizar Dados", use_container_width=True):
+    # Filtros e Atualização
+    c1, c2, c3 = st.columns([2, 1, 1])
+    with c1:
+        busca = st.text_input("🔍 Buscar por Empresa ou Funcionário:").upper()
+    with c2:
+        mes_atual = datetime.now(fuso_br).strftime("%m/%Y")
+        mes_filtro = st.text_input("📅 Mês/Ano (Ex: 04/2026)", value=mes_atual)
+    with c3:
+        st.write("") # Alinhamento
+        if st.button("🔄 Atualizar Lista", use_container_width=True):
             st.rerun()
 
     try:
-        # Puxa os dados organizados do mais novo para o mais velho
-        docs = db.collection("pagamentos").order_by("data_completa", direction="DESCENDING").stream()
-        dados = [doc.to_dict() for doc in docs]
+        # Busca com ID para permitir deleção
+        query = db.collection("pagamentos").order_by("data_completa", direction="DESCENDING")
+        docs = query.stream()
         
-        if dados:
-            df = pd.DataFrame(dados)
+        lista_dados = []
+        for doc in docs:
+            d = doc.to_dict()
+            d['id'] = doc.id # Pega o ID único do documento
+            lista_dados.append(d)
+        
+        if lista_dados:
+            df = pd.DataFrame(lista_dados)
             
-            # Garante que arquivos velhos não quebrem o sistema novo
-            if 'data_completa' not in df.columns:
-                if 'dia' not in df.columns: df['dia'] = df['data'].apply(lambda x: str(x)[0:10] if pd.notnull(x) else "")
-                if 'hora' not in df.columns: df['hora'] = df['data'].apply(lambda x: str(x)[11:16] if pd.notnull(x) else "")
-                if 'mes_ano' not in df.columns: df['mes_ano'] = df['data'].apply(lambda x: str(x)[3:10] if pd.notnull(x) else "")
-            
-            # Aplica a barra de pesquisa
+            # Filtros
             if busca:
-                df = df[df['cliente'].str.contains(busca, case=False)]
-            # Aplica o filtro de mês
-            if mes_filtro != "Todos":
+                df = df[(df['cliente'].str.contains(busca)) | (df['funcionario'].str.contains(busca))]
+            if mes_filtro:
                 df = df[df['mes_ano'] == mes_filtro]
             
-            # --- MOSTRA O RESUMO FINANCEIRO ---
+            # Dashboard simples
             if not df.empty:
-                m1, m2, m3 = st.columns(3)
-                total_rs = df['valor'].sum()
-                qtd_docs = len(df)
-                
-                # Formata moeda padrão Brasil
-                moeda = f"R$ {total_rs:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-                
-                m1.metric("💰 Total do Período", moeda)
-                m2.metric("📄 Notas Lançadas", f"{qtd_docs} documentos")
-                m3.metric("🗓️ Filtro Ativo", "Geral" if mes_filtro == "Todos" else mes_filtro)
+                t1, t2 = st.columns(2)
+                t1.metric("💰 Total Valor", f"R$ {df['valor'].sum():,.2f}")
+                t2.metric("📄 Total Registros", f"{len(df)} docs")
                 st.divider()
-                
-                # --- LISTA OS ARQUIVOS COM HORÁRIO ---
+
                 for i, row in df.iterrows():
-                    icon = "🖼️" if row['tipo'] in ['png', 'jpg', 'jpeg'] else "📄"
-                    if row['tipo'] == 'pdf': icon = "📕"
-                    if row['tipo'] in ['doc', 'docx']: icon = "📘"
+                    icon = "📕" if row['tipo'] == 'pdf' else "🖼️"
+                    label = f"{icon} {row['cliente']} | {row['funcionario']} | R$ {row['valor']:.2f} ({row['dia']})"
                     
-                    titulo = f"{icon} {row['cliente']} | R$ {row['valor']:,.2f} | 🗓️ {row['dia']} às ⏰ {row['hora']}"
-                    
-                    with st.expander(titulo):
-                        c1, c2 = st.columns([1, 1])
-                        with c1:
-                            st.markdown(f"**Empresa:** {row['cliente']}")
-                            st.markdown(f"**Registrado em:** {row['dia']} - {row['hora']}")
-                            st.markdown(f"**Observação:** {row.get('obs', 'Nenhuma')}")
-                            st.link_button("🚀 Abrir Documento Original", row['url'])
-                        with c2:
+                    with st.expander(label):
+                        col_a, col_b = st.columns([2, 1])
+                        with col_a:
+                            st.write(f"**🏢 Empresa:** {row['cliente']} (CNPJ: {row['cnpj']})")
+                            st.write(f"**👤 Funcionário:** {row['funcionario']}")
+                            st.write(f"**⏰ Horário do Registro:** {row['hora']}")
+                            st.write(f"**📝 Obs:** {row['obs']}")
+                            st.link_button("📂 Abrir Arquivo", row['url'])
+                            
+                            # BOTÃO DE EXCLUSÃO
+                            if st.button(f"🗑️ Deletar Registro", key=f"del_{row['id']}"):
+                                try:
+                                    # 1. Deleta do Storage (Se o nome existir)
+                                    if 'nome_storage' in row:
+                                        bucket.blob(f"comprovantes/{row['nome_storage']}").delete()
+                                    # 2. Deleta do Firestore
+                                    db.collection("pagamentos").document(row['id']).delete()
+                                    st.success("Registro apagado!")
+                                    st.rerun()
+                                except Exception as err:
+                                    st.error(f"Erro ao deletar: {err}")
+
+                        with col_b:
                             if row['tipo'] in ['png', 'jpg', 'jpeg']:
                                 st.image(row['url'], use_container_width=True)
                             else:
-                                st.info(f"O arquivo é um .{row['tipo'].upper()}. Clique no botão azul para ler.")
+                                st.info("Preview indisponível para PDF/Word.")
             else:
-                st.warning("Nenhum comprovante encontrado para este filtro. 🕵️‍♂️")
+                st.info("Nenhum registro encontrado para este filtro.")
         else:
-            st.info("O banco de dados está limpinho! Faça o primeiro lançamento na outra aba. 📂")
+            st.info("O sistema ainda não possui registros.")
+            
     except Exception as e:
-        st.error(f"Erro ao organizar dados: {e}")
+        st.error(f"Erro ao carregar painel: {e}")
