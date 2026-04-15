@@ -5,12 +5,14 @@ from datetime import datetime
 import json
 import pandas as pd
 
-# --- CONEXÃO FIREBASE (CORRIGIDA E REVISADA) ---
+# --- CONEXÃO FIREBASE (CORRETA E DEFINITIVA) ---
 if not firebase_admin._apps:
     try:
+        # Puxa a chave dos Secrets do Streamlit
         creds_dict = json.loads(st.secrets["firebase_key"])
         cred = credentials.Certificate(creds_dict)
         
+        # Inicializa o app com o nome EXATO do bucket (sem a letra 'a' sobrando)
         firebase_admin.initialize_app(cred, {
             'storageBucket': 'chamdor-amesaude.appspot.com'
         })
