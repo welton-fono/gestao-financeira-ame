@@ -11,11 +11,11 @@ if not firebase_admin._apps:
         creds_dict = json.loads(st.secrets["firebase_key"])
         cred = credentials.Certificate(creds_dict)
         firebase_admin.initialize_app(cred, {
-            # O ID correto conforme seu console é chamdor-amesaude (sem o 'a')
-            'storageBucket': 'chamdor-amesaude.appspot.com' 
+            # Note: é chamdor (sem o 'a' no meio)
+            'storageBucket': 'chamdor-amesaude.firebasestorage.app' 
         })
     except Exception as e:
-        st.error(f"Erro na chave de segurança: {e}")
+        st.error(f"Erro na chave: {e}")
 
 db = firestore.client()
 bucket = storage.bucket()
