@@ -5,21 +5,26 @@ from datetime import datetime
 import json
 import pandas as pd
 
-# --- CONEXÃO FIREBASE ---
+# --- CONEXÃO FIREBASE (VERSÃO CORRIGIDA) ---
 if not firebase_admin._apps:
     try:
+        # Carrega a chave dos Secrets do Streamlit
         creds_dict = json.loads(st.secrets["firebase_key"])
         cred = credentials.Certificate(creds_dict)
+        
+        # Aqui dizemos EXATAMENTE qual é o projeto e o baú de fotos
         firebase_admin.initialize_app(cred, {
-            # Note: é chamdor (sem o 'a' no meio)
-            'storageBucket': 'chamdor-amesaude.firebasestorage.app' 
+            'projectId': 'chamdor-amesaude',
+            'storageBucket': 'chamdor-amesaude.firebasestorage.app'
         })
     except Exception as e:
-        st.error(f"Erro na chave: {e}")
+        st.error(f"Erro na conexão com o Firebase: {e}")
 
-db = firestore.client()
+# FORÇAMOS o cliente a olhar para o projeto correto
+db = firestore.client(project="chamdor-amesaude")
 bucket = storage.bucket()
 
+# --- CONFIGURAÇÃO DA PÁGINA ---
 st.set_page_config(page_title="AME - Gestão de Arquivos", layout="wide", page_icon="🏥")
 st.title("🏥 AME - Sistema de Comprovantes e Documentos")
 
@@ -40,13 +45,16 @@ with aba_envio:
         if enviado:
             if cliente and arquivo:
                 try:
+                    # 1. Definir nome e extensão
                     extensao = arquivo.name.split('.')[-1].lower()
                     nome_arq = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{cliente}.{extensao}"
                     
+                    # 2. Upload para o Storage
                     blob = bucket.blob(f"comprovantes/{nome_arq}")
                     blob.upload_from_string(arquivo.read(), content_type=arquivo.type)
                     blob.make_public()
                     
+                    # 3. Salvar metadados no Firestore
                     db.collection("pagamentos").add({
                         "data": datetime.now().strftime("%d/%m/%Y %H:%M"),
                         "cliente": cliente,
@@ -58,7 +66,7 @@ with aba_envio:
                     })
                     st.success(f"✅ Arquivo .{extensao.upper()} enviado com sucesso!")
                 except Exception as e:
-                    st.error(f"Erro no envio: {e}")
+                    st.error(f"Erro no envio técnico: {e}")
             else:
                 st.warning("⚠️ Preencha o nome do cliente e anexe um arquivo.")
 
@@ -69,10 +77,12 @@ with aba_busca:
     with col_busca:
         busca = st.text_input("🔍 Pesquisar por Cliente/Empresa:").upper()
     with col_refresh:
-        atualizar = st.button("🔄 Atualizar Lista")
+        # Força o refresh limpando o cache da sessão
+        if st.button("🔄 Atualizar Lista"):
+            st.session_state["primeira_carga"] = True
 
-    if atualizar or busca or "primeira_carga" not in st.session_state:
-        st.session_state["primeira_carga"] = True
+    try:
+        # Busca os dados no Firestore
         docs = db.collection("pagamentos").order_by("data", direction="DESCENDING").stream()
         dados = [doc.to_dict() for doc in docs]
         
@@ -90,16 +100,17 @@ with aba_busca:
                 with st.expander(f"{icon} {row['cliente']} | R$ {row['valor']} | Data: {row['data']}"):
                     c1, c2 = st.columns([1, 1])
                     with c1:
-                        st.info(f"**Tipo de Arquivo:** .{row['tipo'].upper()}")
-                        st.write(f"**Observações:** {row['obs']}")
-                        st.write(f"**Arquivo original:** {row.get('nome_original', 'N/A')}")
-                        st.link_button("🚀 Abrir Documento / Ver em Tela Cheia", row['url'])
+                        st.info(f"**Tipo:** .{row['tipo'].upper()}")
+                        st.write(f"**Obs:** {row['obs']}")
+                        st.link_button("🚀 Abrir Documento / Tela Cheia", row['url'])
                     
                     with c2:
-                        # Se for imagem, mostra o preview na hora
                         if row['tipo'] in ['png', 'jpg', 'jpeg']:
-                            st.image(row['url'], caption="Visualização da Imagem", use_container_width=True)
+                            st.image(row['url'], use_container_width=True)
                         else:
-                            st.warning(f"Este é um arquivo {row['tipo'].upper()}. Clique no botão azul ao lado para visualizar ou baixar.")
+                            st.warning(f"Documento .{row['tipo'].upper()}. Clique no botão azul para ver.")
         else:
             st.info("Nenhum documento encontrado.")
+    except Exception as e:
+        st.error(f"Erro ao carregar dados do Financeiro: {e}")
+        st.info("Dica: Verifique se você publicou as regras (Rules) no Firestore como 'allow read, write: if true;'.")
