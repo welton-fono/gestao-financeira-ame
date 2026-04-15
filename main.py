@@ -4,197 +4,170 @@ from firebase_admin import credentials, firestore, storage
 from datetime import datetime
 import json
 import pandas as pd
-import pytz
 
-# --- CONFIGURAÇÃO DA PÁGINA ---
-st.set_page_config(page_title="AME - Financeiro PRO", layout="wide", page_icon="🏥")
-
-# --- CSS PARA DESIGN PROFISSIONAL ---
-st.markdown("""
-    <style>
-    .stMetric {background-color: #ffffff; padding: 15px; border-radius: 10px; border: 1px solid #e0e0e0; box-shadow: 2px 2px 5px rgba(0,0,0,0.05);}
-    .stExpander {border: 1px solid #d1d1d1; border-radius: 8px; margin-bottom: 10px;}
-    </style>
-""", unsafe_allow_html=True)
+# --- CONFIGURAÇÃO DA PÁGINA (Precisa ser a primeira linha) ---
+st.set_page_config(page_title="AME - Financeiro PRO", layout="wide", page_icon="🏥", initial_sidebar_state="expanded")
 
 # --- CONEXÃO FIREBASE ---
+# Usar o bucket atual: chamdor-amesaude.firebasestorage.app
 if not firebase_admin._apps:
     try:
+        # Carrega a chave dos Secrets do Streamlit
         creds_dict = json.loads(st.secrets["firebase_key"])
         cred = credentials.Certificate(creds_dict)
+        
+        # Inicializa o app com o link EXATO do Firebase atual
         firebase_admin.initialize_app(cred, {
             'storageBucket': 'chamdor-amesaude.firebasestorage.app'
         })
     except Exception as e:
-        st.error(f"Erro na conexão: {e}")
+        st.error(f"Erro na conexão com o Firebase: {e}")
 
 db = firestore.client()
 bucket = storage.bucket()
-fuso_br = pytz.timezone('America/Sao_Paulo')
 
-# --- CABEÇALHO ---
-st.title("🏥 AME Saúde - Gestão de Documentos Profissional")
-st.markdown(f"**Horário Atual (Brasília):** {datetime.now(fuso_br).strftime('%d/%m/%Y %H:%M')}")
+# --- CABEÇALHO COM LOGOTIPO ---
+# Exibir o logotipo e o título
+st.image("image_11.png", width=150)
+st.title("🏥 AME - Sistema de Comprovantes e Documentos")
+st.markdown("Sistema inteligente para organização e faturamento da clínica.")
 st.divider()
 
-aba_envio, aba_busca = st.tabs(["📥 Enviar Novo Comprovante", "📊 Painel do Financeiro"])
+# --- ABAS DE NAVEGAÇÃO ---
+aba_envio, aba_busca = st.tabs(["📥 Lançar Novo Documento", "📊 Painel e Histórico"])
 
 with aba_envio:
-    st.subheader("Registrar Documento")
+    st.subheader("Registrar Novo Lançamento")
+    
     with st.form("form_caixa", clear_on_submit=True):
+        # Campos divididos em duas colunas para ficar elegante
         col1, col2 = st.columns(2)
         with col1:
-            cliente = st.text_input("🏢 Empresa/Cliente").upper()
-            cnpj = st.text_input("📑 CNPJ da Empresa")
+            cliente = st.text_input("🏢 Nome da Empresa ou Cliente").upper()
             valor = st.number_input("💰 Valor (R$)", min_value=0.0, format="%.2f")
-            nf_emitida = st.checkbox("🧾 Nota Fiscal já foi emitida?") # NOVO CAMPO DE NF
-            
         with col2:
-            funcionario = st.text_input("👤 Nome do Funcionário (Exame)")
-            arquivo = st.file_uploader("📎 Anexar Comprovante (PDF, Imagem)")
-            obs = st.text_area("📝 Observações", height=68)
+            # ACEITA QUALQUER TIPO DE ARQUIVO
+            arquivo = st.file_uploader("📎 Selecione o arquivo (PDF, Imagem, Word, etc.)")
+            obs = st.text_area("📝 Observações Adicionais (Opcional)", height=68)
         
-        enviado = st.form_submit_button("🚀 SALVAR REGISTRO", use_container_width=True)
+        # Botão mais destacado
+        enviado = st.form_submit_button("🚀 SALVAR NO SISTEMA", use_container_width=True)
         
         if enviado:
-            if cliente and arquivo and cnpj and funcionario:
+            if cliente and arquivo:
                 try:
-                    ext = arquivo.name.split('.')[-1].lower()
-                    agora = datetime.now(fuso_br)
-                    nome_arq = f"{agora.strftime('%Y%m%d_%H%M%S')}_{cliente}.{ext}"
+                    # 1. Definir nome e extensão
+                    extensao = arquivo.name.split('.')[-1].lower()
+                    agora = datetime.now()
+                    nome_arq = f"{agora.strftime('%Y%m%d_%H%M%S')}_{cliente}.{extensao}"
                     
+                    # 2. Upload para o Storage
                     blob = bucket.blob(f"comprovantes/{nome_arq}")
                     blob.upload_from_string(arquivo.read(), content_type=arquivo.type)
                     blob.make_public()
                     
+                    # 3. Salvar metadados no Firestore com informações de tempo detalhadas
                     db.collection("pagamentos").add({
-                        "data_completa": agora.strftime("%Y/%m/%d %H:%M:%S"),
+                        "data_completa": agora.strftime("%Y/%m/%d %H:%M:%S"), # Formato para ordenar fácil
                         "dia": agora.strftime("%d/%m/%Y"),
                         "hora": agora.strftime("%H:%M"),
                         "mes_ano": agora.strftime("%m/%Y"),
                         "cliente": cliente,
-                        "cnpj": cnpj,
-                        "funcionario": funcionario,
                         "valor": valor,
-                        "nf_emitida": nf_emitida, # SALVA O STATUS DA NF
                         "url": blob.public_url,
-                        "nome_storage": nome_arq,
-                        "tipo": ext,
+                        "tipo": extensao,
                         "obs": obs
                     })
-                    st.success(f"✅ Registro de {cliente} salvo com sucesso!")
+                    st.success(f"✅ Sucesso! O comprovante de {cliente} foi salvo e organizado no dia {agora.strftime('%d/%m/%Y')} às {agora.strftime('%H:%M')}.")
                 except Exception as e:
-                    st.error(f"Erro: {e}")
+                    st.error(f"Erro no envio técnico: {e}")
             else:
-                st.warning("⚠️ Todos os campos e o arquivo são obrigatórios.")
+                st.warning("⚠️ Preencha o nome da empresa e anexe o arquivo antes de enviar.")
 
 with aba_busca:
     st.subheader("Painel de Controle Financeiro")
     
-    # Adicionado um novo filtro para a NF
-    c1, c2, c3, c4 = st.columns([2, 1, 1, 1])
-    with c1:
-        busca = st.text_input("🔍 Buscar por Empresa ou Funcionário:").upper()
-    with c2:
-        mes_atual = datetime.now(fuso_br).strftime("%m/%Y")
-        mes_filtro = st.text_input("📅 Mês/Ano", value=mes_atual)
-    with c3:
-        filtro_nf = st.selectbox("🧾 Status da NF", ["Todos", "⏳ Pendentes", "✅ Emitidas"])
-    with c4:
-        st.write("") 
-        if st.button("🔄 Atualizar Lista", use_container_width=True):
+    # Linha de Filtros organizada em colunas
+    col_busca, col_refresh, col_mes = st.columns([2, 1, 1])
+    with col_busca:
+        busca = st.text_input("🔍 Buscar por Empresa/Cliente:").upper()
+    with col_mes:
+        # Criar uma lista de meses/anos para o seletor
+        meses_lista = [f"{str(i).zfill(2)}/{datetime.now().year}" for i in range(1, 13)]
+        mes_atual = datetime.now().strftime("%m/%Y")
+        mes_filtro = st.selectbox("📅 Filtrar por Mês", ["Todos"] + meses_lista, index=meses_lista.index(mes_atual) + 1)
+    with col_refresh:
+        st.write("<br>", unsafe_allow_html=True) # Espaço para alinhar o botão
+        if st.button("🔄 Atualizar Dados", use_container_width=True):
+            # st.experimental_rerun() foi depreciado, use st.rerun() no Streamlit 1.20+
             st.rerun()
 
     try:
-        query = db.collection("pagamentos").order_by("data_completa", direction="DESCENDING")
-        docs = query.stream()
+        # Busca os dados no Firestore, ordenando pela data completa (mais novo primeiro)
+        # É importante ter salvado a "data_completa" no formato Y/m/d H:M:S para ordenar certo
+        docs = db.collection("pagamentos").order_by("data_completa", direction="DESCENDING").stream()
+        dados = [doc.to_dict() for doc in docs]
         
-        lista_dados = []
-        for doc in docs:
-            d = doc.to_dict()
-            d['id'] = doc.id
-            d['nf_emitida'] = d.get('nf_emitida', False) # Proteção para os arquivos velhos
-            lista_dados.append(d)
-        
-        if lista_dados:
-            df = pd.DataFrame(lista_dados).fillna("")
+        if dados:
+            df = pd.DataFrame(dados)
             
-            # Aplicação dos Filtros
+            # Adiciona informações de tempo para documentos antigos que não têm esses campos
+            if 'data_completa' not in df.columns:
+                # Se não tem data_completa, assume que o campo data é a data antiga e processa
+                df['dia'] = df['data'].apply(lambda x: str(x)[0:10] if pd.notnull(x) else "")
+                df['hora'] = df['data'].apply(lambda x: str(x)[11:16] if pd.notnull(x) else "")
+                df['mes_ano'] = df['data'].apply(lambda x: str(x)[3:10] if pd.notnull(x) else "")
+
+            # Aplica o filtro de busca
             if busca:
-                df = df[(df['cliente'].astype(str).str.contains(busca)) | (df['funcionario'].astype(str).str.contains(busca))]
-            if mes_filtro:
+                df = df[df['cliente'].str.contains(busca, case=False)]
+            
+            # Aplica o filtro de mês
+            if mes_filtro != "Todos":
                 df = df[df['mes_ano'] == mes_filtro]
             
-            if filtro_nf == "⏳ Pendentes":
-                df = df[df['nf_emitida'] == False]
-            elif filtro_nf == "✅ Emitidas":
-                df = df[df['nf_emitida'] == True]
-            
+            # --- MOSTRA O RESUMO FINANCEIRO EM MÉTRICAS ---
             if not df.empty:
-                # Novas Métricas de Dashboard
-                t1, t2, t3 = st.columns(3)
-                t1.metric("💰 Total (Filtro)", f"R$ {df['valor'].sum():,.2f}")
-                t2.metric("📄 Total de Registros", f"{len(df)} docs")
-                qtd_pendentes = len(df[df['nf_emitida'] == False])
-                t3.metric("⚠️ NFs Pendentes", f"{qtd_pendentes} notas")
                 st.divider()
-
+                t1, t2, t3 = st.columns(3)
+                total_rs = df['valor'].sum()
+                qtd_docs = len(df)
+                
+                # Formata moeda padrão Brasil
+                moeda_formatada = f"R$ {total_rs:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+                
+                t1.metric("💰 Total Movimentado", moeda_formatada)
+                t2.metric("📄 Notas Carregadas", f"{qtd_docs} documentos")
+                t3.metric("🗓️ Filtro Ativo", "Geral" if mes_filtro == "Todos" else mes_filtro)
+                st.divider()
+                
+                # --- LISTA OS ARQUIVOS COM HORÁRIO ---
                 for i, row in df.iterrows():
-                    icon = "📕" if row['tipo'] == 'pdf' else "🖼️"
-                    func_v = row['funcionario'] if row['funcionario'] and str(row['funcionario']).lower() != "nan" else "N/A"
-                    cnpj_v = row['cnpj'] if row['cnpj'] and str(row['cnpj']).lower() != "nan" else "N/A"
+                    # Define o ícone baseado no tipo de arquivo
+                    icon = "🖼️" if row['tipo'] in ['png', 'jpg', 'jpeg'] else "📄"
+                    if row['tipo'] == 'pdf': icon = "📕"
+                    if row['tipo'] in ['doc', 'docx']: icon = "📘"
                     
-                    # Selo visual de status
-                    status_nf = "✅ NF Emitida" if row['nf_emitida'] else "⏳ NF Pendente"
+                    # Título do expansor com mais detalhes
+                    titulo_expander = f"{icon} {row['cliente']} | R$ {row['valor']:,.2f} | 🗓️ {row['dia']} às ⏰ {row['hora']}"
                     
-                    with st.expander(f"{icon} {row['cliente']} | {func_v} | R$ {row['valor']:.2f} | {status_nf}"):
-                        col_a, col_b = st.columns([2, 1])
-                        with col_a:
-                            st.write(f"**🏢 Empresa:** {row['cliente']} (CNPJ: {cnpj_v})")
-                            st.write(f"**👤 Funcionário:** {func_v}")
-                            st.write(f"**⏰ Data/Hora:** {row.get('dia', '--')} às {row.get('hora', '--:--')}")
-                            st.write(f"**📝 Obs:** {row.get('obs', '')}")
-                            st.write(f"**🧾 Status Fiscal:** {status_nf}")
-                            st.link_button("📂 Abrir Arquivo Original", row['url'])
-                            
-                            st.write("---")
-                            # BOTÕES DE AÇÃO LADO A LADO
-                            act1, act2 = st.columns(2)
-                            with act1:
-                                # Se estiver pendente, mostra o botão para dar baixa na NF
-                                if not row['nf_emitida']:
-                                    if st.button(f"✅ Marcar NF Emitida", key=f"ok_{row['id']}", type="primary"):
-                                        try:
-                                            db.collection("pagamentos").document(row['id']).update({"nf_emitida": True})
-                                            st.success("Nota Fiscal baixada com sucesso!")
-                                            st.rerun()
-                                        except Exception as err:
-                                            st.error(f"Erro ao atualizar: {err}")
-                            with act2:
-                                if st.button(f"🗑️ Deletar Registro", key=f"del_{row['id']}"):
-                                    try:
-                                        nome_arq_storage = str(row.get('nome_storage', '')).strip()
-                                        if nome_arq_storage and nome_arq_storage.lower() != "nan":
-                                            try:
-                                                bucket.blob(f"comprovantes/{nome_arq_storage}").delete()
-                                            except Exception:
-                                                pass 
-                                                
-                                        db.collection("pagamentos").document(row['id']).delete()
-                                        st.success("Registro removido!")
-                                        st.rerun()
-                                    except Exception as err:
-                                        st.error(f"Erro ao apagar: {err}")
-
-                        with col_b:
+                    with st.expander(titulo_expander):
+                        c1, c2 = st.columns([1, 1])
+                        with c1:
+                            st.info(f"**Empresa:** {row['cliente']}")
+                            st.write(f"**Registrado em:** {row['dia']} - {row['hora']}")
+                            st.write(f"**Observações:** {row['obs']}")
+                            st.link_button("🚀 Abrir Documento Original", row['url'])
+                        
+                        with c2:
+                            # Se for imagem, mostra o preview centralizado
                             if row['tipo'] in ['png', 'jpg', 'jpeg']:
                                 st.image(row['url'], use_container_width=True)
                             else:
-                                st.info("Sem preview.")
+                                st.warning(f"O documento é um arquivo do tipo .{row['tipo'].upper()}. Clique no botão azul ao lado para visualizá-lo.")
             else:
-                st.info("Nenhum registro encontrado para estes filtros.")
+                st.info("Nenhum comprovante encontrado para este filtro.")
         else:
-            st.info("O sistema está vazio.")
-            
+            st.info("O banco de dados está vazio. Faça o primeiro lançamento na aba '📥 Lançar Novo Documento'.")
     except Exception as e:
-        st.error(f"Erro ao carregar dados: {e}")
+        st.error(f"Erro ao organizar dados do Financeiro: {e}")
