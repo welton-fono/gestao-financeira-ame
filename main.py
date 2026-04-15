@@ -19,70 +19,86 @@ if not firebase_admin._apps:
 db = firestore.client()
 bucket = storage.bucket()
 
-# --- CONFIGURAÇÃO DA PÁGINA ---
-st.set_page_config(page_title="AME - Financeiro", layout="wide", page_icon="🏥")
-st.title("🏥 AME - Gestão de Comprovantes Online")
+st.set_page_config(page_title="AME - Gestão de Arquivos", layout="wide", page_icon="🏥")
+st.title("🏥 AME - Sistema de Comprovantes e Documentos")
 
-aba_envio, aba_busca = st.tabs(["📥 Recepção (Envio)", "🔍 Financeiro (Consulta)"])
+aba_envio, aba_busca = st.tabs(["📥 Enviar Arquivo", "🔍 Painel do Financeiro"])
 
 with aba_envio:
-    st.subheader("Registrar Novo Pagamento")
+    st.subheader("Upload de Documentos")
     with st.form("form_caixa", clear_on_submit=True):
-        cliente = st.text_input("Nome da Empresa ou Cliente")
-        valor = st.number_input("Valor Recebido (R$)", min_value=0.0, format="%.2f")
-        arquivo = st.file_uploader("Anexe a foto do comprovante", type=["png", "jpg", "jpeg"])
-        obs = st.text_area("Observações")
+        cliente = st.text_input("Nome da Empresa ou Cliente").upper()
+        valor = st.number_input("Valor (R$)", min_value=0.0, format="%.2f")
         
-        enviado = st.form_submit_button("Enviar para o Financeiro")
+        # ACEITA QUALQUER TIPO DE ARQUIVO
+        arquivo = st.file_uploader("Selecione o arquivo (PDF, Word, Imagem, etc.)")
+        
+        obs = st.text_area("Observações Adicionais")
+        enviado = st.form_submit_button("Enviar para o Sistema")
         
         if enviado:
-            if cliente and arquivo and valor > 0:
+            if cliente and arquivo:
                 try:
-                    # 1. Upload da Foto
-                    nome_arq = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{cliente}.jpg"
+                    extensao = arquivo.name.split('.')[-1].lower()
+                    nome_arq = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{cliente}.{extensao}"
+                    
                     blob = bucket.blob(f"comprovantes/{nome_arq}")
                     blob.upload_from_string(arquivo.read(), content_type=arquivo.type)
                     blob.make_public()
                     
-                    # 2. Salvar no Banco de Dados
                     db.collection("pagamentos").add({
                         "data": datetime.now().strftime("%d/%m/%Y %H:%M"),
-                        "cliente": cliente.upper(),
+                        "cliente": cliente,
                         "valor": valor,
                         "url": blob.public_url,
-                        "status": "Pendente",
+                        "tipo": extensao,
+                        "nome_original": arquivo.name,
                         "obs": obs
                     })
-                    st.success(f"✅ Sucesso! Pagamento de {cliente} registrado.")
+                    st.success(f"✅ Arquivo .{extensao.upper()} enviado com sucesso!")
                 except Exception as e:
-                    st.error(f"Erro ao enviar arquivo: {e}")
+                    st.error(f"Erro no envio: {e}")
             else:
-                st.warning("⚠️ Preencha o nome, valor e anexe a foto.")
+                st.warning("⚠️ Preencha o nome do cliente e anexe um arquivo.")
 
 with aba_busca:
-    st.subheader("Painel do Financeiro (Visualização Rápida)")
+    st.subheader("Visualização e Acesso Rápido")
     
-    if st.button("🔄 Atualizar e Buscar Dados"):
+    col_busca, col_refresh = st.columns([4, 1])
+    with col_busca:
+        busca = st.text_input("🔍 Pesquisar por Cliente/Empresa:").upper()
+    with col_refresh:
+        atualizar = st.button("🔄 Atualizar Lista")
+
+    if atualizar or busca or "primeira_carga" not in st.session_state:
+        st.session_state["primeira_carga"] = True
         docs = db.collection("pagamentos").order_by("data", direction="DESCENDING").stream()
         dados = [doc.to_dict() for doc in docs]
         
         if dados:
             df = pd.DataFrame(dados)
-            
-            # Barra de busca para o financeiro achar rápido
-            busca = st.text_input("🔍 Buscar por nome do cliente:")
             if busca:
-                df = df[df['cliente'].str.contains(busca.upper(), case=False)]
+                df = df[df['cliente'].str.contains(busca, case=False)]
             
-            # Exibe os comprovantes em cards expansíveis
             for i, row in df.iterrows():
-                with st.expander(f"📄 {row['cliente']} - R$ {row['valor']} ({row['data']})"):
-                    col1, col2 = st.columns([1, 1])
-                    with col1:
-                        st.write(f"**Status:** {row['status']}")
-                        st.write(f"**Observação:** {row['obs']}")
-                        st.link_button("Abrir imagem em tela cheia", row['url'])
-                    with col2:
-                        st.image(row['url'], width=300)
+                # Define o ícone baseado no tipo
+                icon = "🖼️" if row['tipo'] in ['png', 'jpg', 'jpeg'] else "📄"
+                if row['tipo'] == 'pdf': icon = "📕"
+                if row['tipo'] in ['doc', 'docx']: icon = "📘"
+                
+                with st.expander(f"{icon} {row['cliente']} | R$ {row['valor']} | Data: {row['data']}"):
+                    c1, c2 = st.columns([1, 1])
+                    with c1:
+                        st.info(f"**Tipo de Arquivo:** .{row['tipo'].upper()}")
+                        st.write(f"**Observações:** {row['obs']}")
+                        st.write(f"**Arquivo original:** {row.get('nome_original', 'N/A')}")
+                        st.link_button("🚀 Abrir Documento / Ver em Tela Cheia", row['url'])
+                    
+                    with c2:
+                        # Se for imagem, mostra o preview na hora
+                        if row['tipo'] in ['png', 'jpg', 'jpeg']:
+                            st.image(row['url'], caption="Visualização da Imagem", use_container_width=True)
+                        else:
+                            st.warning(f"Este é um arquivo {row['tipo'].upper()}. Clique no botão azul ao lado para visualizar ou baixar.")
         else:
-            st.info("Nenhum registro encontrado no banco de dados.")
+            st.info("Nenhum documento encontrado.")
