@@ -4,7 +4,7 @@ from firebase_admin import credentials, firestore, storage
 from datetime import datetime
 import json
 import pandas as pd
-import pytz # Biblioteca para Fuso Horário
+import pytz
 
 # --- CONFIGURAÇÃO DA PÁGINA ---
 st.set_page_config(page_title="AME - Financeiro PRO", layout="wide", page_icon="🏥")
@@ -14,7 +14,6 @@ st.markdown("""
     <style>
     .stMetric {background-color: #ffffff; padding: 15px; border-radius: 10px; border: 1px solid #e0e0e0;}
     .stExpander {border: 1px solid #d1d1d1; border-radius: 8px; margin-bottom: 10px;}
-    .main {background-color: #f9f9f9;}
     </style>
 """, unsafe_allow_html=True)
 
@@ -31,7 +30,7 @@ if not firebase_admin._apps:
 
 db = firestore.client()
 bucket = storage.bucket()
-fuso_br = pytz.timezone('America/Sao_Paulo') # Configura Brasília
+fuso_br = pytz.timezone('America/Sao_Paulo')
 
 # --- CABEÇALHO ---
 st.title("🏥 AME Saúde - Gestão de Documentos Profissional")
@@ -60,15 +59,12 @@ with aba_envio:
                 try:
                     ext = arquivo.name.split('.')[-1].lower()
                     agora = datetime.now(fuso_br)
-                    # Nome do arquivo no storage
                     nome_arq = f"{agora.strftime('%Y%m%d_%H%M%S')}_{cliente}.{ext}"
                     
-                    # Upload Storage
                     blob = bucket.blob(f"comprovantes/{nome_arq}")
                     blob.upload_from_string(arquivo.read(), content_type=arquivo.type)
                     blob.make_public()
                     
-                    # Salva no Firestore
                     db.collection("pagamentos").add({
                         "data_completa": agora.strftime("%Y/%m/%d %H:%M:%S"),
                         "dia": agora.strftime("%d/%m/%Y"),
@@ -79,11 +75,11 @@ with aba_envio:
                         "funcionario": funcionario,
                         "valor": valor,
                         "url": blob.public_url,
-                        "nome_storage": nome_arq, # Guardamos para poder deletar depois
+                        "nome_storage": nome_arq,
                         "tipo": ext,
                         "obs": obs
                     })
-                    st.success(f"✅ Registro de {cliente} salvo com sucesso em {agora.strftime('%H:%M')}!")
+                    st.success(f"✅ Registro de {cliente} salvo com sucesso!")
                 except Exception as e:
                     st.error(f"Erro: {e}")
             else:
@@ -92,7 +88,6 @@ with aba_envio:
 with aba_busca:
     st.subheader("Painel de Controle Financeiro")
     
-    # Filtros e Atualização
     c1, c2, c3 = st.columns([2, 1, 1])
     with c1:
         busca = st.text_input("🔍 Buscar por Empresa ou Funcionário:").upper()
@@ -100,31 +95,29 @@ with aba_busca:
         mes_atual = datetime.now(fuso_br).strftime("%m/%Y")
         mes_filtro = st.text_input("📅 Mês/Ano (Ex: 04/2026)", value=mes_atual)
     with c3:
-        st.write("") # Alinhamento
+        st.write("") 
         if st.button("🔄 Atualizar Lista", use_container_width=True):
             st.rerun()
 
     try:
-        # Busca com ID para permitir deleção
         query = db.collection("pagamentos").order_by("data_completa", direction="DESCENDING")
         docs = query.stream()
         
         lista_dados = []
         for doc in docs:
             d = doc.to_dict()
-            d['id'] = doc.id # Pega o ID único do documento
+            d['id'] = doc.id
             lista_dados.append(d)
         
         if lista_dados:
-            df = pd.DataFrame(lista_dados)
+            # Substitui valores nulos ou NaN por strings vazias para evitar erros
+            df = pd.DataFrame(lista_dados).fillna("")
             
-            # Filtros
             if busca:
-                df = df[(df['cliente'].str.contains(busca)) | (df['funcionario'].str.contains(busca))]
+                df = df[(df['cliente'].astype(str).str.contains(busca)) | (df['funcionario'].astype(str).str.contains(busca))]
             if mes_filtro:
                 df = df[df['mes_ano'] == mes_filtro]
             
-            # Dashboard simples
             if not df.empty:
                 t1, t2 = st.columns(2)
                 t1.metric("💰 Total Valor", f"R$ {df['valor'].sum():,.2f}")
@@ -133,39 +126,48 @@ with aba_busca:
 
                 for i, row in df.iterrows():
                     icon = "📕" if row['tipo'] == 'pdf' else "🖼️"
-                    label = f"{icon} {row['cliente']} | {row['funcionario']} | R$ {row['valor']:.2f} ({row['dia']})"
+                    # Limpeza visual para dados antigos
+                    func_v = row['funcionario'] if row['funcionario'] and str(row['funcionario']).lower() != "nan" else "Não informado"
+                    cnpj_v = row['cnpj'] if row['cnpj'] and str(row['cnpj']).lower() != "nan" else "Não informado"
                     
-                    with st.expander(label):
+                    with st.expander(f"{icon} {row['cliente']} | {func_v} | R$ {row['valor']:.2f}"):
                         col_a, col_b = st.columns([2, 1])
                         with col_a:
-                            st.write(f"**🏢 Empresa:** {row['cliente']} (CNPJ: {row['cnpj']})")
-                            st.write(f"**👤 Funcionário:** {row['funcionario']}")
-                            st.write(f"**⏰ Horário do Registro:** {row['hora']}")
-                            st.write(f"**📝 Obs:** {row['obs']}")
+                            st.write(f"**🏢 Empresa:** {row['cliente']} (CNPJ: {cnpj_v})")
+                            st.write(f"**👤 Funcionário:** {func_v}")
+                            st.write(f"**⏰ Horário:** {row.get('hora', '--:--')}")
+                            st.write(f"**📝 Obs:** {row.get('obs', '')}")
                             st.link_button("📂 Abrir Arquivo", row['url'])
                             
-                            # BOTÃO DE EXCLUSÃO
+                            # LOGICA DE EXCLUSÃO MELHORADA
                             if st.button(f"🗑️ Deletar Registro", key=f"del_{row['id']}"):
                                 try:
-                                    # 1. Deleta do Storage (Se o nome existir)
-                                    if 'nome_storage' in row:
-                                        bucket.blob(f"comprovantes/{row['nome_storage']}").delete()
-                                    # 2. Deleta do Firestore
+                                    # Pega o nome do arquivo e verifica se é válido (não é vazio nem "nan")
+                                    nome_arq_storage = str(row.get('nome_storage', '')).strip()
+                                    
+                                    if nome_arq_storage and nome_arq_storage.lower() != "nan":
+                                        try:
+                                            # Tenta apagar, mas se não achar o arquivo, não trava o programa
+                                            bucket.blob(f"comprovantes/{nome_arq_storage}").delete()
+                                        except Exception:
+                                            pass 
+                                            
+                                    # Apaga o registro do banco de dados (isso sempre funciona se o ID existir)
                                     db.collection("pagamentos").document(row['id']).delete()
-                                    st.success("Registro apagado!")
+                                    st.success("Registro removido!")
                                     st.rerun()
                                 except Exception as err:
-                                    st.error(f"Erro ao deletar: {err}")
+                                    st.error(f"Erro ao apagar: {err}")
 
                         with col_b:
                             if row['tipo'] in ['png', 'jpg', 'jpeg']:
                                 st.image(row['url'], use_container_width=True)
                             else:
-                                st.info("Preview indisponível para PDF/Word.")
+                                st.info("Sem preview.")
             else:
-                st.info("Nenhum registro encontrado para este filtro.")
+                st.info("Nenhum registro encontrado.")
         else:
-            st.info("O sistema ainda não possui registros.")
+            st.info("O sistema está vazio.")
             
     except Exception as e:
-        st.error(f"Erro ao carregar painel: {e}")
+        st.error(f"Erro ao carregar dados: {e}")
