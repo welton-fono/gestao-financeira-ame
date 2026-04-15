@@ -11,8 +11,8 @@ if not firebase_admin._apps:
         creds_dict = json.loads(st.secrets["firebase_key"])
         cred = credentials.Certificate(creds_dict)
         firebase_admin.initialize_app(cred, {
-            # CORREÇÃO DO BUCKET:
-            'storageBucket': 'glowing-road-493319-u2.appspot.com' 
+            # Este é o nome que aparece na sua imagem
+            'storageBucket': 'chamdor-amesaude.appspot.com' 
         })
     except Exception as e:
         st.error(f"Erro na chave: {e}")
