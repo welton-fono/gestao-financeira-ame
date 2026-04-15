@@ -7,13 +7,11 @@ import pandas as pd
 
 # --- CONEXÃO FIREBASE ---
 if not firebase_admin._apps:
-    try:
-        creds_dict = json.loads(st.secrets["firebase_key"])
-        cred = credentials.Certificate(creds_dict)
-        firebase_admin.initialize_app(cred, {
-            # Este é o nome que aparece na sua imagem
-            'storageBucket': 'chamdor-amesaude.appspot.com' 
-        })
+    creds_dict = json.loads(st.secrets["firebase_key"])
+    cred = credentials.Certificate(creds_dict)
+    firebase_admin.initialize_app(cred, {
+        'storageBucket': 'chamdor-amesaude.appspot.com' 
+    })
     except Exception as e:
         st.error(f"Erro na chave: {e}")
 
