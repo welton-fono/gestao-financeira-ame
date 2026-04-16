@@ -14,7 +14,7 @@ st.set_page_config(page_title="AME - Sistema Profissional", layout="wide", page_
 # --- LOGIN SIMPLES ---
 def check_password():
     def password_entered():
-        if st.session_state["password"] == "ame2026": # VOCÊ PODE MUDAR A SENHA AQUI
+        if st.session_state["password"] == "ame2026":
             st.session_state["password_correct"] = True
             del st.session_state["password"]
         else:
@@ -40,7 +40,6 @@ st.markdown("""
     html, body, [class*="View"] { font-size: 19px !important; }
     .logo-ame { font-size: 60px; font-weight: 900; color: #008f39; margin-bottom: -15px; }
     .sub-logo { font-size: 18px; color: #444; font-weight: 600; margin-bottom: 20px; text-transform: uppercase; }
-    .alerta-nota { background-color: #ff4b4b; color: white; padding: 15px; border-radius: 10px; text-align: center; font-weight: bold; font-size: 24px; margin-bottom: 20px; }
     </style>
 """, unsafe_allow_html=True)
 
@@ -58,15 +57,18 @@ bucket = storage.bucket()
 fuso_br = pytz.timezone('America/Sao_Paulo')
 
 # --- BUSCA DE DADOS ---
-@st.cache_data(ttl=60) # Faz o site carregar mais rápido
+@st.cache_data(ttl=30)
 def obter_dados():
-    docs = db.collection("pagamentos").order_by("data_ordenacao", direction="DESCENDING").stream()
-    lista = []
-    for doc in docs:
-        item = doc.to_dict()
-        item['id'] = doc.id
-        lista.append(item)
-    return pd.DataFrame(lista) if lista else pd.DataFrame()
+    try:
+        docs = db.collection("pagamentos").order_by("data_ordenacao", direction="DESCENDING").stream()
+        lista = []
+        for doc in docs:
+            item = doc.to_dict()
+            item['id'] = doc.id
+            lista.append(item)
+        return pd.DataFrame(lista) if lista else pd.DataFrame()
+    except:
+        return pd.DataFrame()
 
 df = obter_dados()
 
@@ -108,30 +110,36 @@ with aba_envio:
                     "status_nota": "PENDENTE", "obs": obs, "tipo": ext
                 })
                 st.balloons()
-                st.success("✅ Registro enviado!")
                 st.cache_data.clear()
+                st.success("✅ Registro enviado!")
                 time.sleep(1)
                 st.rerun()
 
 with aba_financeiro:
     st.subheader("Painel de Controle e Exportação")
     
-    # Filtros Avançados
-    f1, f2, f3 = st.columns([2, 1, 1])
-    with f1:
-        pesquisa = st.text_input("🔍 Buscar por Empresa/Funcionário:").upper()
-    with f2:
-        meses = df['mes_ano'].unique().tolist() if not df.empty else [datetime.now(fuso_br).strftime("%m/%Y")]
-        filtro_mes = st.selectbox("📅 Filtrar Mês", ["Todos"] + meses)
-    with f3:
-        filtro_status = st.selectbox("🧾 Status NF", ["Todos", "PENDENTE", "REALIZADA"])
-
     if not df.empty:
+        # --- PROTEÇÃO CONTRA O ERRO DE COLUNA FALTANTE ---
+        if 'mes_ano' not in df.columns:
+            df['mes_ano'] = "Antigos"
+        if 'status_nota' not in df.columns:
+            df['status_nota'] = "PENDENTE"
+            
         df_view = df.copy().fillna("")
         
+        # Filtros
+        f1, f2, f3 = st.columns([2, 1, 1])
+        with f1:
+            pesquisa = st.text_input("🔍 Buscar por Empresa/Funcionário:").upper()
+        with f2:
+            meses = sorted(df_view['mes_ano'].unique().tolist())
+            filtro_mes = st.selectbox("📅 Filtrar Mês", ["Todos"] + meses)
+        with f3:
+            filtro_status = st.selectbox("🧾 Status NF", ["Todos", "PENDENTE", "REALIZADA"])
+
         # Aplicar filtros
         if pesquisa:
-            df_view = df_view[(df_view['empresa'].str.contains(pesquisa)) | (df_view['funcionario'].str.contains(pesquisa))]
+            df_view = df_view[(df_view['empresa'].astype(str).str.contains(pesquisa)) | (df_view['funcionario'].astype(str).str.contains(pesquisa))]
         if filtro_mes != "Todos":
             df_view = df_view[df_view['mes_ano'] == filtro_mes]
         if filtro_status != "Todos":
@@ -152,22 +160,20 @@ with aba_financeiro:
 
         st.divider()
         
-        # Alerta de Pendências
-        pendentes_count = len(df_view[df_view['status_nota'] == "PENDENTE"])
-        if pendentes_count > 0:
-            st.warning(f"🚨 Existem {pendentes_count} notas pendentes neste filtro.")
-
         for i, row in df_view.iterrows():
             status_cor = "🟢" if row['status_nota'] == "REALIZADA" else "🔴"
             with st.expander(f"{status_cor} {row['empresa']} | {row['funcionario']} | R$ {row['valor']:.2f}"):
                 col_a, col_b = st.columns([2, 1])
                 with col_a:
-                    st.write(f"**Data Envio:** {row['data_formatada']} às {row['hora']}")
+                    st.write(f"**Data Envio:** {row.get('data_formatada', '---')} às {row.get('hora', '---')}")
                     st.link_button("📂 Ver Comprovante", row['url_arquivo'])
                     
                     if row['status_nota'] == "PENDENTE":
                         if st.button("✅ MARCAR NOTA COMO FEITA", key=f"btn_{row['id']}", type="primary"):
-                            db.collection("pagamentos").document(row['id']).update({"status_nota": "REALIZADA", "data_nota_feita": datetime.now(fuso_br).strftime("%d/%m/%Y %H:%M")})
+                            db.collection("pagamentos").document(row['id']).update({
+                                "status_nota": "REALIZADA", 
+                                "data_nota_feita": datetime.now(fuso_br).strftime("%d/%m/%Y %H:%M")
+                            })
                             st.cache_data.clear()
                             st.rerun()
                     else:
@@ -179,4 +185,4 @@ with aba_financeiro:
                         st.cache_data.clear()
                         st.rerun()
     else:
-        st.info("Nenhum registro para exibir.")
+        st.info("O banco de dados está vazio. Envie o primeiro comprovante!")
