@@ -9,13 +9,48 @@ import pytz
 # --- CONFIGURAÇÃO DA PÁGINA ---
 st.set_page_config(page_title="AME - Financeiro PRO", layout="wide", page_icon="🏥", initial_sidebar_state="expanded")
 
-# --- CSS PARA DESIGN PROFISSIONAL ---
+# --- CSS PARA DESIGN PROFISSIONAL E LETRAS MAIORES ---
 st.markdown("""
     <style>
-    .stMetric {background-color: #ffffff; padding: 15px; border-radius: 10px; border: 1px solid #e0e0e0; box-shadow: 2px 2px 5px rgba(0,0,0,0.05);}
-    .stExpander {border: 1px solid #d1d1d1; border-radius: 8px; margin-bottom: 10px;}
-    .logo-ame {font-size: 48px; font-weight: 900; color: #008f39; letter-spacing: 1px; margin-bottom: -10px;}
-    .sub-logo {font-size: 14px; color: #555555; font-weight: 600; margin-bottom: 20px; text-transform: uppercase;}
+    /* Aumentar o tamanho da fonte global */
+    html, body, [class*="View"] {
+        font-size: 18px !important;
+    }
+    
+    /* Estilizar métricas (Quadrados do topo) */
+    .stMetric {
+        background-color: #ffffff; 
+        padding: 20px; 
+        border-radius: 12px; 
+        border: 1px solid #e0e0e0; 
+        box-shadow: 2px 2px 8px rgba(0,0,0,0.08);
+    }
+    [data-testid="stMetricValue"] {
+        font-size: 32px !important;
+        font-weight: bold;
+    }
+    [data-testid="stMetricLabel"] {
+        font-size: 20px !important;
+    }
+
+    /* Estilizar Títulos e Subtítulos */
+    h1 { font-size: 42px !important; color: #008f39 !important; }
+    h2, h3 { font-size: 28px !important; }
+
+    /* Estilizar o Expander (Lista de notas) */
+    .stExpander {
+        border: 1px solid #d1d1d1; 
+        border-radius: 10px; 
+        margin-bottom: 12px;
+        background-color: #ffffff;
+    }
+    
+    .logo-ame { font-size: 60px; font-weight: 900; color: #008f39; letter-spacing: 2px; margin-bottom: -15px; }
+    .sub-logo { font-size: 18px; color: #555555; font-weight: 600; margin-bottom: 25px; text-transform: uppercase; }
+    
+    /* Deixar os inputs e labels maiores */
+    label { font-size: 20px !important; font-weight: bold !important; }
+    input { font-size: 18px !important; }
     </style>
 """, unsafe_allow_html=True)
 
@@ -52,7 +87,7 @@ with aba_envio:
         with col2:
             funcionario = st.text_input("👤 Nome do Funcionário (Exame)")
             arquivo = st.file_uploader("📎 Anexar Comprovante (PDF, Imagem)")
-            obs = st.text_area("📝 Observações", height=68)
+            obs = st.text_area("📝 Observações", height=100)
         
         enviado = st.form_submit_button("SALVAR REGISTRO", use_container_width=True)
         
@@ -75,7 +110,7 @@ with aba_envio:
                         "cnpj": cnpj,
                         "funcionario": funcionario,
                         "valor": valor,
-                        "arquivado": nf_pronta, # STATUS DE ARQUIVAMENTO
+                        "arquivado": nf_pronta, 
                         "url": blob.public_url,
                         "nome_storage": nome_arq,
                         "tipo": ext,
@@ -104,25 +139,25 @@ with aba_busca:
             st.rerun()
 
     try:
-        query = db.collection("pagamentos").order_by("data_completa", direction="DESCENDING")
-        docs = query.stream()
+        # Puxa os dados
+        docs = db.collection("pagamentos").order_by("data_completa", direction="DESCENDING").stream()
         lista_dados = []
         for doc in docs:
             d = doc.to_dict()
             d['id'] = doc.id
+            # GARANTE QUE O ARQUIVAMENTO FUNCIONE MESMO PARA REGISTROS SEM ESSE CAMPO
             d['arquivado'] = d.get('arquivado', False)
             lista_dados.append(d)
         
         if lista_dados:
             df = pd.DataFrame(lista_dados).fillna("")
             
-            # Filtros de busca e data
             if busca:
                 df = df[(df['cliente'].astype(str).str.contains(busca)) | (df['funcionario'].astype(str).str.contains(busca))]
             if mes_filtro:
                 df = df[df['mes_ano'] == mes_filtro]
             
-            # Lógica de Arquivamento no Painel
+            # Lógica de filtro corrigida
             if exibir_arquivados == "📌 Ativos (Pendentes)":
                 df = df[df['arquivado'] == False]
             elif exibir_arquivados == "📁 Arquivados (Baixados)":
@@ -144,6 +179,7 @@ with aba_busca:
                         col_a, col_b = st.columns([2, 1])
                         with col_a:
                             st.write(f"**Empresa:** {row['cliente']} (CNPJ: {row['cnpj']})")
+                            st.write(f"**Funcionário:** {row['funcionario']}")
                             st.write(f"**Data:** {row.get('dia', '--')} às {row.get('hora', '--:--')}")
                             st.write(f"**Obs:** {row.get('obs', '')}")
                             st.link_button("📂 Ver Arquivo", row['url'])
@@ -152,17 +188,15 @@ with aba_busca:
                             act1, act2 = st.columns(2)
                             with act1:
                                 if not row['arquivado']:
-                                    if st.button(f"📥 Arquivar Nota", key=f"ark_{row['id']}", type="primary"):
+                                    if st.button(f"📥 Arquivar Nota", key=f"ark_{row['id']}", type="primary", use_container_width=True):
                                         db.collection("pagamentos").document(row['id']).update({"arquivado": True})
-                                        st.success("Nota arquivada!")
                                         st.rerun()
                                 else:
-                                    if st.button(f"🔙 Desarquivar", key=f"unark_{row['id']}"):
+                                    if st.button(f"🔙 Desarquivar", key=f"unark_{row['id']}", use_container_width=True):
                                         db.collection("pagamentos").document(row['id']).update({"arquivado": False})
                                         st.rerun()
                             with act2:
-                                if st.button(f"🗑️ Deletar", key=f"del_{row['id']}"):
-                                    # Lógica de deletar (Firestore + Storage)
+                                if st.button(f"🗑️ Deletar", key=f"del_{row['id']}", use_container_width=True):
                                     try:
                                         nome_arq = str(row.get('nome_storage', ''))
                                         if nome_arq and nome_arq.lower() != "nan":
@@ -176,7 +210,7 @@ with aba_busca:
                             if row['tipo'] in ['png', 'jpg', 'jpeg']:
                                 st.image(row['url'], use_container_width=True)
                             else:
-                                st.info("Sem preview.")
+                                st.info("Preview indisponível.")
             else:
                 st.info("Nenhum registro encontrado nesta categoria.")
         else:
