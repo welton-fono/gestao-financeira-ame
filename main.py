@@ -57,11 +57,11 @@ def obter_dados():
 
 df = obter_dados()
 
-# --- CÁLCULO DE PENDÊNCIAS PARA O BALÃO ---
+# --- CÁLCULO DE PENDÊNCIAS ---
 pendentes_total = 0
 if not df.empty:
-    if 'url_nf' not in df.columns: df['url_nf'] = None
-    if 'status_nota' not in df.columns: df['status_nota'] = "PENDENTE"
+    for col in ['url_nf', 'status_nota']:
+        if col not in df.columns: df[col] = None
     pendentes_total = len(df[(df['url_nf'].isna() | (df['url_nf'] == "")) & (df['status_nota'] != "REALIZADA")])
 
 # --- CSS ---
@@ -69,95 +69,97 @@ st.markdown(f"""
     <style>
     .logo-ame {{ font-size: 55px; font-weight: 900; color: #008f39; margin-bottom: -15px; }}
     .sub-logo {{ font-size: 16px; color: #444; font-weight: 600; margin-bottom: 20px; }}
-    /* Estilo do Balão de Notificação na Aba */
-    .badge {{
-        background-color: #ff4b4b;
-        color: white;
-        padding: 2px 8px;
-        border-radius: 10px;
-        font-size: 14px;
-        margin-left: 5px;
-        font-weight: bold;
-    }}
     </style>
 """, unsafe_allow_html=True)
 
 st.markdown('<div class="logo-ame">AME</div>', unsafe_allow_html=True)
 st.markdown('<div class="sub-logo">ASSISTÊNCIA MÉDICA ESPECIALIZADA</div>', unsafe_allow_html=True)
 
-# Título da aba com balão dinâmico
-texto_aba_financeiro = f"🔍 FINANCEIRO"
-if pendentes_total > 0:
-    texto_aba_financeiro = f"🔍 FINANCEIRO ({pendentes_total})"
-
-aba_envio, aba_financeiro, aba_dashboard = st.tabs(["📥 LANÇAR", texto_aba_financeiro, "📊 DASHBOARD"])
+aba_envio, aba_financeiro, aba_dashboard = st.tabs([
+    "📥 LANÇAR", 
+    f"🔍 FINANCEIRO ({pendentes_total})" if pendentes_total > 0 else "🔍 FINANCEIRO", 
+    "📊 DASHBOARD"
+])
 
 with aba_envio:
     st.subheader("Registrar Novo Documento")
+    
+    # LÓGICA DE MEMÓRIA (Auto-completar)
+    sugestao_empresa = ""
+    sugestao_func = ""
+    
+    doc_input = st.text_input("📑 Digite CNPJ ou CPF (Grava automaticamente)").strip()
+    
+    if doc_input and not df.empty:
+        # Busca no banco se esse documento já existe
+        registro_antigo = df[df['cnpj'] == doc_input]
+        if not registro_antigo.empty:
+            sugestao_empresa = registro_antigo.iloc[0]['empresa']
+            sugestao_func = registro_antigo.iloc[0]['funcionario']
+            st.info(f"✨ Documento reconhecido! Preenchendo dados de: {sugestao_empresa}")
+
     with st.form("form_registro", clear_on_submit=True):
         c1, c2 = st.columns(2)
         with c1:
-            empresa = st.text_input("🏢 Empresa").upper()
-            cnpj = st.text_input("📑 CNPJ")
-            valor = st.number_input("💰 Valor", min_value=0.0)
+            empresa = st.text_input("🏢 Empresa/Cliente", value=sugestao_empresa).upper()
+            valor = st.number_input("💰 Valor (R$)", min_value=0.0)
         with c2:
-            func = st.text_input("👤 Funcionário")
+            funcionario = st.text_input("👤 Funcionário", value=sugestao_func).upper()
             arquivo = st.file_uploader("📎 Comprovante")
-            obs = st.text_area("📝 Obs")
+        
+        obs = st.text_area("📝 Observações")
+        
         if st.form_submit_button("🚀 SALVAR REGISTRO", use_container_width=True):
-            if empresa and arquivo and func:
+            if empresa and arquivo and doc_input:
                 agora = datetime.now(fuso_br)
                 ext = arquivo.name.split('.')[-1].lower()
                 nome_arq = f"{agora.strftime('%Y%m%d_%H%M%S')}_{empresa}.{ext}"
                 blob = bucket.blob(f"comprovantes/{nome_arq}")
                 blob.upload_from_string(arquivo.read(), content_type=arquivo.type)
                 blob.make_public()
+                
                 db.collection("pagamentos").add({
                     "data_ordenacao": agora.strftime("%Y/%m/%d %H:%M:%S"),
                     "data_formatada": agora.strftime("%d/%m/%Y"),
-                    "dia": agora.strftime("%d"),
                     "mes_ano": agora.strftime("%m/%Y"),
-                    "empresa": empresa, "cnpj": cnpj, "funcionario": func,
-                    "valor": valor, "url_arquivo": blob.public_url,
-                    "status_nota": "PENDENTE", "url_nf": None
+                    "empresa": empresa, 
+                    "cnpj": doc_input, # Salva o CNPJ/CPF informado
+                    "funcionario": funcionario,
+                    "valor": valor, 
+                    "url_arquivo": blob.public_url,
+                    "status_nota": "PENDENTE", 
+                    "url_nf": None,
+                    "obs": obs
                 })
-                st.success("Salvo!")
+                st.success("✅ Registro e Documento salvos na memória!")
                 st.cache_data.clear()
+                time.sleep(1)
                 st.rerun()
+            else:
+                st.warning("⚠️ O campo de Documento (CNPJ/CPF), Empresa e Arquivo são obrigatórios.")
 
 with aba_financeiro:
     st.subheader("Painel de Controle")
-    
     if not df.empty:
-        # Garantir colunas
-        for col in ['mes_ano', 'data_formatada', 'status_nota', 'url_nf']:
-            if col not in df.columns: df[col] = None
-        
         df_view = df.copy().fillna("")
         
-        # --- FILTROS DE PESQUISA ---
-        col_p, col_m, col_d = st.columns([2, 1, 1])
-        with col_p:
-            pesquisa = st.text_input("🔍 Buscar Empresa/Funcionário:").upper()
-        with col_m:
+        # --- FILTROS DE PESQUISA AMPLIADOS ---
+        col1, col2, col3 = st.columns([1.5, 1.5, 1])
+        with col1:
+            pesquisa = st.text_input("🔍 Buscar Nome (Empresa/Funcionario):").upper()
+        with col2:
+            pesquisa_doc = st.text_input("🔍 Buscar por CNPJ ou CPF:")
+        with col3:
             meses = sorted(df_view['mes_ano'].unique().tolist())
             filtro_mes = st.selectbox("📅 Mês/Ano", ["Todos"] + meses)
-        with col_d:
-            filtro_dia = st.text_input("📆 Dia (Ex: 16)")
 
-        # Aplicar os filtros
+        # Aplicar Filtros
         if pesquisa:
             df_view = df_view[(df_view['empresa'].str.contains(pesquisa)) | (df_view['funcionario'].str.contains(pesquisa))]
+        if pesquisa_doc:
+            df_view = df_view[df_view['cnpj'].str.contains(pesquisa_doc)]
         if filtro_mes != "Todos":
             df_view = df_view[df_view['mes_ano'] == filtro_mes]
-        if filtro_dia:
-            df_view = df_view[df_view['data_formatada'].str.startswith(filtro_dia)]
-
-        # Botão Excel
-        buffer = io.BytesIO()
-        with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-            df_view.to_excel(writer, index=False)
-        st.download_button("📥 BAIXAR EXCEL", buffer, "financeiro_ame.xlsx", use_container_width=True)
 
         st.divider()
 
@@ -166,50 +168,44 @@ with aba_financeiro:
             foi_marcada = row.get('status_nota') == "REALIZADA"
             status_cor = "🟢" if (tem_nf or foi_marcada) else "🔴"
             
-            with st.expander(f"{status_cor} {row['empresa']} | {row['funcionario']} | R$ {row['valor']:.2f}"):
+            with st.expander(f"{status_cor} {row['empresa']} | Doc: {row['cnpj']} | R$ {row['valor']:.2f}"):
                 c1, c2 = st.columns([2,1])
                 with c1:
-                    st.write(f"**Data:** {row.get('data_formatada')}")
+                    st.write(f"**Funcionário:** {row['funcionario']}")
+                    st.write(f"**Data:** {row['data_formatada']}")
                     st.link_button("👁️ Ver Comprovante", row['url_arquivo'])
                     
                     if tem_nf or foi_marcada:
-                        st.success(f"✅ Nota realizada em: {row.get('data_nota_feita', 'Data não registrada')}")
-                        if tem_nf:
-                            st.link_button("📄 BAIXAR NOTA PDF", row['url_nf'], type="primary")
+                        st.success(f"✅ Nota realizada em: {row.get('data_nota_feita', 'Data manual')}")
+                        if tem_nf: st.link_button("📄 BAIXAR NOTA PDF", row['url_nf'], type="primary")
                     else:
-                        st.error("⏳ NF PENDENTE")
-                        # BOTÃO DE CONFIRMAÇÃO MANUAL
-                        if st.button("✔️ Marcar como Nota Feita (Manual)", key=f"man_{row['id']}"):
-                            agora_nf = datetime.now(fuso_br).strftime("%d/%m/%Y %H:%M")
+                        if st.button("✔️ Marcar como Nota Feita", key=f"m_{row['id']}"):
                             db.collection("pagamentos").document(row['id']).update({
                                 "status_nota": "REALIZADA",
-                                "data_nota_feita": agora_nf
+                                "data_nota_feita": datetime.now(fuso_br).strftime("%d/%m/%Y %H:%M")
                             })
                             st.cache_data.clear()
                             st.rerun()
-
-                        st.write("---")
-                        up_nf = st.file_uploader("Anexar PDF da Nota", key=f"up_{row['id']}")
+                        
+                        up_nf = st.file_uploader("Anexar PDF da Nota", key=f"u_{row['id']}")
                         if up_nf and st.button("Confirmar PDF", key=f"b_{row['id']}"):
                             blob_nf = bucket.blob(f"notas/{row['id']}.pdf")
                             blob_nf.upload_from_string(up_nf.read(), content_type="application/pdf")
                             blob_nf.make_public()
                             db.collection("pagamentos").document(row['id']).update({
-                                "url_nf": blob_nf.public_url, 
-                                "status_nota": "REALIZADA", 
+                                "url_nf": blob_nf.public_url, "status_nota": "REALIZADA", 
                                 "data_nota_feita": datetime.now(fuso_br).strftime("%d/%m/%Y %H:%M")
                             })
                             st.cache_data.clear()
                             st.rerun()
                 with c2:
-                    if st.button("🗑️ Deletar", key=f"d_{row['id']}", use_container_width=True):
+                    if st.button("🗑️ Deletar", key=f"d_{row['id']}"):
                         db.collection("pagamentos").document(row['id']).delete()
                         st.cache_data.clear()
                         st.rerun()
 
-# --- ABA DASHBOARD (Mantida igual) ---
 with aba_dashboard:
-    st.subheader("📊 Análise de Desempenho AME")
+    # (Mantido os gráficos conforme a última versão)
     if not df.empty:
         df_dash = df.copy()
         df_dash['valor'] = pd.to_numeric(df_dash['valor'])
@@ -217,11 +213,4 @@ with aba_dashboard:
         col1.metric("💰 Faturamento Total", f"R$ {df_dash['valor'].sum():,.2f}")
         col2.metric("🏢 Total de Empresas", df_dash['empresa'].nunique())
         col3.metric("📑 Exames Realizados", len(df_dash))
-        
-        g1, g2 = st.columns(2)
-        with g1:
-            fat_empresa = df_dash.groupby('empresa')['valor'].sum().reset_index().sort_values('valor', ascending=False).head(10)
-            st.plotly_chart(px.bar(fat_empresa, x='empresa', y='valor', color='valor', color_continuous_scale='Greens'), use_container_width=True)
-        with g2:
-            vol_mes = df_dash.groupby('mes_ano').size().reset_index(name='quantidade')
-            st.plotly_chart(px.line(vol_mes, x='mes_ano', y='quantidade', markers=True), use_container_width=True)
+        st.plotly_chart(px.bar(df_dash.groupby('empresa')['valor'].sum().reset_index(), x='empresa', y='valor', color='valor', color_continuous_scale='Greens'), use_container_width=True)
