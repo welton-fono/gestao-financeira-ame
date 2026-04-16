@@ -17,7 +17,6 @@ st.markdown("""
     .logo-ame { font-size: 60px; font-weight: 900; color: #008f39; margin-bottom: -15px; }
     .sub-logo { font-size: 18px; color: #444; font-weight: 600; margin-bottom: 20px; text-transform: uppercase; }
     
-    /* Estilo do Alerta de Nota Pendente */
     .alerta-nota {
         background-color: #ff4b4b;
         color: white;
@@ -48,27 +47,34 @@ fuso_br = pytz.timezone('America/Sao_Paulo')
 
 # --- BUSCA DE DADOS ---
 def obter_dados():
-    docs = db.collection("pagamentos").order_by("data_ordenacao", direction="DESCENDING").stream()
-    lista = []
-    for doc in docs:
-        item = doc.to_dict()
-        item['id'] = doc.id
-        lista.append(item)
-    return pd.DataFrame(lista) if lista else pd.DataFrame()
+    try:
+        docs = db.collection("pagamentos").order_by("data_ordenacao", direction="DESCENDING").stream()
+        lista = []
+        for doc in docs:
+            item = doc.to_dict()
+            item['id'] = doc.id
+            lista.append(item)
+        return pd.DataFrame(lista) if lista else pd.DataFrame()
+    except:
+        return pd.DataFrame()
 
 df = obter_dados()
 
-# --- VERIFICAÇÃO DE NOTAS PENDENTES (PARA A NOTIFICAÇÃO) ---
+# --- VERIFICAÇÃO DE NOTAS PENDENTES (COM PROTEÇÃO CONTRA ERRO) ---
 notas_pendentes = 0
 if not df.empty:
-    # Conta registros que não possuem url_nf
+    # Se a coluna url_nf não existir no DataFrame, nós a criamos vazia para não dar erro
+    if 'url_nf' not in df.columns:
+        df['url_nf'] = None
+    
+    # Conta registros que não possuem url_nf ou estão vazios
     notas_pendentes = len(df[df['url_nf'].isna() | (df['url_nf'] == "")])
 
 # --- CABEÇALHO ---
 st.markdown('<div class="logo-ame">AME</div>', unsafe_allow_html=True)
 st.markdown('<div class="sub-logo">Assistência Médica Especializada</div>', unsafe_allow_html=True)
 
-# NOTIFICAÇÃO QUE APARECE EM TODAS AS ABAS
+# NOTIFICAÇÃO FIXA
 if notas_pendentes > 0:
     st.markdown(f'<div class="alerta-nota">🚨 TEM NOTA FISCAL PARA FAZER ({notas_pendentes} pendentes)</div>', unsafe_allow_html=True)
 
@@ -115,8 +121,10 @@ with aba_financeiro:
     
     if not df.empty:
         df_view = df.copy()
+        if 'url_nf' not in df_view.columns: df_view['url_nf'] = None # Proteção extra
+        
         if pesquisa:
-            df_view = df_view[(df_view['empresa'].str.contains(pesquisa)) | (df_view['funcionario'].str.contains(pesquisa))]
+            df_view = df_view[(df_view['empresa'].astype(str).str.contains(pesquisa)) | (df_view['funcionario'].astype(str).str.contains(pesquisa))]
         
         for i, row in df_view.iterrows():
             tem_nf = "✅ NF OK" if row.get('url_nf') else "⏳ PENDENTE"
@@ -129,10 +137,9 @@ with aba_financeiro:
                     if row.get('url_nf'):
                         st.link_button("📄 BAIXAR NOTA FISCAL PRONTA", row['url_nf'], type="primary")
                     else:
-                        st.error("Esta nota ainda não foi feita.")
+                        st.error("Esta nota ainda não foi anexada.")
                     
                     st.divider()
-                    # ÁREA DE COLOCAR A NOTA FISCAL PRONTA
                     up_nf = st.file_uploader("📤 Anexar PDF da Nota Fiscal Pronta", key=f"nf_{row['id']}")
                     if up_nf:
                         if st.button("Confirmar Anexo da NF", key=f"btn_{row['id']}"):
@@ -148,4 +155,4 @@ with aba_financeiro:
                         db.collection("pagamentos").document(row['id']).delete()
                         st.rerun()
     else:
-        st.info("Nenhum registro.")
+        st.info("Nenhum registro encontrado.")
