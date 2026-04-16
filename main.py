@@ -60,21 +60,17 @@ def obter_dados():
 
 df = obter_dados()
 
-# --- VERIFICAÇÃO DE NOTAS PENDENTES (COM PROTEÇÃO CONTRA ERRO) ---
+# --- VERIFICAÇÃO DE NOTAS PENDENTES ---
 notas_pendentes = 0
 if not df.empty:
-    # Se a coluna url_nf não existir no DataFrame, nós a criamos vazia para não dar erro
     if 'url_nf' not in df.columns:
         df['url_nf'] = None
-    
-    # Conta registros que não possuem url_nf ou estão vazios
     notas_pendentes = len(df[df['url_nf'].isna() | (df['url_nf'] == "")])
 
 # --- CABEÇALHO ---
 st.markdown('<div class="logo-ame">AME</div>', unsafe_allow_html=True)
 st.markdown('<div class="sub-logo">Assistência Médica Especializada</div>', unsafe_allow_html=True)
 
-# NOTIFICAÇÃO FIXA
 if notas_pendentes > 0:
     st.markdown(f'<div class="alerta-nota">🚨 TEM NOTA FISCAL PARA FAZER ({notas_pendentes} pendentes)</div>', unsafe_allow_html=True)
 
@@ -108,7 +104,9 @@ with aba_envio:
                     "hora": agora.strftime("%H:%M"),
                     "empresa": empresa, "cnpj": cnpj, "funcionario": func,
                     "valor": valor, "url_arquivo": blob.public_url,
-                    "url_nf": None, "obs": obs, "tipo": ext
+                    "url_nf": None, 
+                    "data_nota_feita": None, # Campo novo
+                    "obs": obs, "tipo": ext
                 })
                 st.toast("✅ Registro salvo!", icon="🔔")
                 st.success("Enviado com sucesso!")
@@ -117,41 +115,57 @@ with aba_envio:
 
 with aba_financeiro:
     st.subheader("Gestão de Pagamentos e Notas")
-    pesquisa = st.text_input("🔍 Buscar:").upper()
+    pesquisa = st.text_input("🔍 Buscar por Empresa ou Funcionário:").upper()
     
     if not df.empty:
         df_view = df.copy()
-        if 'url_nf' not in df_view.columns: df_view['url_nf'] = None # Proteção extra
+        if 'url_nf' not in df_view.columns: df_view['url_nf'] = None
+        if 'data_nota_feita' not in df_view.columns: df_view['data_nota_feita'] = None
         
         if pesquisa:
             df_view = df_view[(df_view['empresa'].astype(str).str.contains(pesquisa)) | (df_view['funcionario'].astype(str).str.contains(pesquisa))]
         
         for i, row in df_view.iterrows():
-            tem_nf = "✅ NF OK" if row.get('url_nf') else "⏳ PENDENTE"
-            with st.expander(f"{row['empresa']} | {row['funcionario']} | R$ {row['valor']:.2f} | {tem_nf}"):
+            status_cor = "🟢" if row.get('url_nf') else "🔴"
+            txt_status = "NOTA REALIZADA" if row.get('url_nf') else "NF PENDENTE"
+            
+            with st.expander(f"{status_cor} {row['empresa']} | {row['funcionario']} | {txt_status}"):
                 col_a, col_b = st.columns([2, 1])
                 with col_a:
-                    st.write(f"**Data:** {row['data_formatada']} às {row['hora']}")
-                    st.link_button("📂 Ver Comprovante", row['url_arquivo'])
+                    st.write(f"**Valor:** R$ {row['valor']:.2f}")
+                    st.write(f"**Envio do Exame:** {row['data_formatada']} às {row['hora']}")
                     
-                    if row.get('url_nf'):
-                        st.link_button("📄 BAIXAR NOTA FISCAL PRONTA", row['url_nf'], type="primary")
-                    else:
-                        st.error("Esta nota ainda não foi anexada.")
+                    if row.get('data_nota_feita'):
+                        st.info(f"✅ **Nota fiscal realizada em:** {row['data_nota_feita']}")
                     
                     st.divider()
+                    st.link_button("📂 Ver Comprovante de Exame", row['url_arquivo'], use_container_width=True)
+                    
+                    if row.get('url_nf'):
+                        st.link_button("📄 BAIXAR NOTA FISCAL PRONTA", row['url_nf'], type="primary", use_container_width=True)
+                    else:
+                        st.error("⚠️ Esta nota fiscal ainda não foi enviada.")
+                    
+                    st.divider()
+                    # ANEXAR NOTA E SALVAR DATA/HORA
                     up_nf = st.file_uploader("📤 Anexar PDF da Nota Fiscal Pronta", key=f"nf_{row['id']}")
                     if up_nf:
-                        if st.button("Confirmar Anexo da NF", key=f"btn_{row['id']}"):
+                        if st.button("Confirmar e Registrar Data", key=f"btn_{row['id']}", use_container_width=True):
+                            agora_nf = datetime.now(fuso_br).strftime("%d/%m/%Y às %H:%M")
                             blob_nf = bucket.blob(f"notas/{row['id']}.pdf")
                             blob_nf.upload_from_string(up_nf.read(), content_type="application/pdf")
                             blob_nf.make_public()
-                            db.collection("pagamentos").document(row['id']).update({"url_nf": blob_nf.public_url})
-                            st.success("Nota anexada!")
+                            
+                            db.collection("pagamentos").document(row['id']).update({
+                                "url_nf": blob_nf.public_url,
+                                "data_nota_feita": agora_nf # Salva o momento da conclusão
+                            })
+                            st.success(f"Nota registrada em {agora_nf}!")
+                            time.sleep(1)
                             st.rerun()
                 
                 with col_b:
-                    if st.button("🗑️ Deletar", key=f"del_{row['id']}", use_container_width=True):
+                    if st.button("🗑️ Excluir Registro", key=f"del_{row['id']}", use_container_width=True):
                         db.collection("pagamentos").document(row['id']).delete()
                         st.rerun()
     else:
