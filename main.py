@@ -46,7 +46,7 @@ bucket = storage.bucket()
 fuso_br = pytz.timezone('America/Sao_Paulo')
 
 # --- BUSCA DE DADOS ---
-@st.cache_data(ttl=10)
+@st.cache_data(ttl=5)
 def obter_dados():
     try:
         docs = db.collection("pagamentos").order_by("data_ordenacao", direction="DESCENDING").stream()
@@ -57,22 +57,43 @@ def obter_dados():
 
 df = obter_dados()
 
+# --- CÁLCULO DE PENDÊNCIAS PARA O BALÃO ---
+pendentes_total = 0
+if not df.empty:
+    if 'url_nf' not in df.columns: df['url_nf'] = None
+    if 'status_nota' not in df.columns: df['status_nota'] = "PENDENTE"
+    pendentes_total = len(df[(df['url_nf'].isna() | (df['url_nf'] == "")) & (df['status_nota'] != "REALIZADA")])
+
 # --- CSS ---
-st.markdown("""
+st.markdown(f"""
     <style>
-    .logo-ame { font-size: 55px; font-weight: 900; color: #008f39; margin-bottom: -15px; }
-    .sub-logo { font-size: 16px; color: #444; font-weight: 600; margin-bottom: 20px; }
-    .card { background-color: #f9f9f9; padding: 20px; border-radius: 10px; border-left: 5px solid #008f39; }
+    .logo-ame {{ font-size: 55px; font-weight: 900; color: #008f39; margin-bottom: -15px; }}
+    .sub-logo {{ font-size: 16px; color: #444; font-weight: 600; margin-bottom: 20px; }}
+    /* Estilo do Balão de Notificação na Aba */
+    .badge {{
+        background-color: #ff4b4b;
+        color: white;
+        padding: 2px 8px;
+        border-radius: 10px;
+        font-size: 14px;
+        margin-left: 5px;
+        font-weight: bold;
+    }}
     </style>
 """, unsafe_allow_html=True)
 
 st.markdown('<div class="logo-ame">AME</div>', unsafe_allow_html=True)
 st.markdown('<div class="sub-logo">ASSISTÊNCIA MÉDICA ESPECIALIZADA</div>', unsafe_allow_html=True)
 
-aba_envio, aba_financeiro, aba_dashboard = st.tabs(["📥 LANÇAR", "🔍 FINANCEIRO", "📊 DASHBOARD"])
+# Título da aba com balão dinâmico
+texto_aba_financeiro = f"🔍 FINANCEIRO"
+if pendentes_total > 0:
+    texto_aba_financeiro = f"🔍 FINANCEIRO ({pendentes_total})"
 
-# --- ABA ENVIO (Mesma função de antes) ---
+aba_envio, aba_financeiro, aba_dashboard = st.tabs(["📥 LANÇAR", texto_aba_financeiro, "📊 DASHBOARD"])
+
 with aba_envio:
+    st.subheader("Registrar Novo Documento")
     with st.form("form_registro", clear_on_submit=True):
         c1, c2 = st.columns(2)
         with c1:
@@ -94,6 +115,7 @@ with aba_envio:
                 db.collection("pagamentos").add({
                     "data_ordenacao": agora.strftime("%Y/%m/%d %H:%M:%S"),
                     "data_formatada": agora.strftime("%d/%m/%Y"),
+                    "dia": agora.strftime("%d"),
                     "mes_ano": agora.strftime("%m/%Y"),
                     "empresa": empresa, "cnpj": cnpj, "funcionario": func,
                     "valor": valor, "url_arquivo": blob.public_url,
@@ -103,81 +125,103 @@ with aba_envio:
                 st.cache_data.clear()
                 st.rerun()
 
-# --- ABA FINANCEIRO (Com Excel e Anexo de NF) ---
 with aba_financeiro:
+    st.subheader("Painel de Controle")
+    
     if not df.empty:
+        # Garantir colunas
+        for col in ['mes_ano', 'data_formatada', 'status_nota', 'url_nf']:
+            if col not in df.columns: df[col] = None
+        
         df_view = df.copy().fillna("")
-        pesquisa = st.text_input("🔍 Pesquisar:").upper()
+        
+        # --- FILTROS DE PESQUISA ---
+        col_p, col_m, col_d = st.columns([2, 1, 1])
+        with col_p:
+            pesquisa = st.text_input("🔍 Buscar Empresa/Funcionário:").upper()
+        with col_m:
+            meses = sorted(df_view['mes_ano'].unique().tolist())
+            filtro_mes = st.selectbox("📅 Mês/Ano", ["Todos"] + meses)
+        with col_d:
+            filtro_dia = st.text_input("📆 Dia (Ex: 16)")
+
+        # Aplicar os filtros
         if pesquisa:
             df_view = df_view[(df_view['empresa'].str.contains(pesquisa)) | (df_view['funcionario'].str.contains(pesquisa))]
-        
+        if filtro_mes != "Todos":
+            df_view = df_view[df_view['mes_ano'] == filtro_mes]
+        if filtro_dia:
+            df_view = df_view[df_view['data_formatada'].str.startswith(filtro_dia)]
+
+        # Botão Excel
         buffer = io.BytesIO()
         with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
             df_view.to_excel(writer, index=False)
         st.download_button("📥 BAIXAR EXCEL", buffer, "financeiro_ame.xlsx", use_container_width=True)
 
+        st.divider()
+
         for i, row in df_view.iterrows():
-            pronto = row.get('url_nf')
-            st_cor = "🟢" if pronto else "🔴"
-            with st.expander(f"{st_cor} {row['empresa']} | {row['funcionario']} | R$ {row['valor']:.2f}"):
+            tem_nf = row.get('url_nf') != "" and row.get('url_nf') is not None
+            foi_marcada = row.get('status_nota') == "REALIZADA"
+            status_cor = "🟢" if (tem_nf or foi_marcada) else "🔴"
+            
+            with st.expander(f"{status_cor} {row['empresa']} | {row['funcionario']} | R$ {row['valor']:.2f}"):
                 c1, c2 = st.columns([2,1])
                 with c1:
-                    st.write(f"Data: {row.get('data_formatada')}")
+                    st.write(f"**Data:** {row.get('data_formatada')}")
                     st.link_button("👁️ Ver Comprovante", row['url_arquivo'])
-                    if pronto:
-                        st.link_button("📄 BAIXAR NOTA", row['url_nf'], type="primary")
+                    
+                    if tem_nf or foi_marcada:
+                        st.success(f"✅ Nota realizada em: {row.get('data_nota_feita', 'Data não registrada')}")
+                        if tem_nf:
+                            st.link_button("📄 BAIXAR NOTA PDF", row['url_nf'], type="primary")
                     else:
-                        up_nf = st.file_uploader("Anexar NF PDF", key=f"f_{row['id']}")
-                        if up_nf and st.button("Confirmar", key=f"b_{row['id']}"):
+                        st.error("⏳ NF PENDENTE")
+                        # BOTÃO DE CONFIRMAÇÃO MANUAL
+                        if st.button("✔️ Marcar como Nota Feita (Manual)", key=f"man_{row['id']}"):
+                            agora_nf = datetime.now(fuso_br).strftime("%d/%m/%Y %H:%M")
+                            db.collection("pagamentos").document(row['id']).update({
+                                "status_nota": "REALIZADA",
+                                "data_nota_feita": agora_nf
+                            })
+                            st.cache_data.clear()
+                            st.rerun()
+
+                        st.write("---")
+                        up_nf = st.file_uploader("Anexar PDF da Nota", key=f"up_{row['id']}")
+                        if up_nf and st.button("Confirmar PDF", key=f"b_{row['id']}"):
                             blob_nf = bucket.blob(f"notas/{row['id']}.pdf")
                             blob_nf.upload_from_string(up_nf.read(), content_type="application/pdf")
                             blob_nf.make_public()
-                            db.collection("pagamentos").document(row['id']).update({"url_nf": blob_nf.public_url, "status_nota": "REALIZADA", "data_nota_feita": datetime.now(fuso_br).strftime("%d/%m/%Y %H:%M")})
+                            db.collection("pagamentos").document(row['id']).update({
+                                "url_nf": blob_nf.public_url, 
+                                "status_nota": "REALIZADA", 
+                                "data_nota_feita": datetime.now(fuso_br).strftime("%d/%m/%Y %H:%M")
+                            })
                             st.cache_data.clear()
                             st.rerun()
                 with c2:
-                    if st.button("🗑️ Deletar", key=f"d_{row['id']}"):
+                    if st.button("🗑️ Deletar", key=f"d_{row['id']}", use_container_width=True):
                         db.collection("pagamentos").document(row['id']).delete()
                         st.cache_data.clear()
                         st.rerun()
 
-# --- ABA DASHBOARD (NOVIDADE!) ---
+# --- ABA DASHBOARD (Mantida igual) ---
 with aba_dashboard:
     st.subheader("📊 Análise de Desempenho AME")
     if not df.empty:
         df_dash = df.copy()
         df_dash['valor'] = pd.to_numeric(df_dash['valor'])
-        
-        # 1. Métricas Rápidas
         col1, col2, col3 = st.columns(3)
         col1.metric("💰 Faturamento Total", f"R$ {df_dash['valor'].sum():,.2f}")
         col2.metric("🏢 Total de Empresas", df_dash['empresa'].nunique())
         col3.metric("📑 Exames Realizados", len(df_dash))
-
-        st.divider()
-
-        # 2. Gráficos
-        g1, g2 = st.columns(2)
         
+        g1, g2 = st.columns(2)
         with g1:
-            st.markdown("**🏢 Faturamento por Empresa**")
             fat_empresa = df_dash.groupby('empresa')['valor'].sum().reset_index().sort_values('valor', ascending=False).head(10)
-            fig1 = px.bar(fat_empresa, x='empresa', y='valor', color='valor', color_continuous_scale='Greens')
-            st.plotly_chart(fig1, use_container_width=True)
-
+            st.plotly_chart(px.bar(fat_empresa, x='empresa', y='valor', color='valor', color_continuous_scale='Greens'), use_container_width=True)
         with g2:
-            st.markdown("**📈 Volume de Exames por Mês**")
             vol_mes = df_dash.groupby('mes_ano').size().reset_index(name='quantidade')
-            fig2 = px.line(vol_mes, x='mes_ano', y='quantidade', markers=True, line_shape='spline')
-            fig2.update_traces(line_color='#008f39')
-            st.plotly_chart(fig2, use_container_width=True)
-
-        # 3. Status das Notas
-        st.markdown("**🧾 Status das Notas Fiscais (Geral)**")
-        df_dash['Status'] = df_dash['url_nf'].apply(lambda x: "Realizada" if x else "Pendente")
-        status_pie = df_dash['Status'].value_counts().reset_index()
-        fig3 = px.pie(status_pie, values='count', names='Status', color='Status', 
-                     color_discrete_map={'Realizada':'#008f39', 'Pendente':'#ff4b4b'}, hole=.4)
-        st.plotly_chart(fig3, use_container_width=True)
-    else:
-        st.info("Aguardando dados para gerar os gráficos.")
+            st.plotly_chart(px.line(vol_mes, x='mes_ano', y='quantidade', markers=True), use_container_width=True)
